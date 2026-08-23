@@ -1,0 +1,75 @@
+{
+  "generated": "2026-08-23",
+  "method": "DeepFilterNet3 (AI/ML speech enhancement)",
+  "dataset": "300 mixtures (3 noise categories x 5 SNR levels x 20 speakers), 48 kHz, synthetic",
+  "evaluation_pairs": 1500,
+  "pesq_wb_valid": 1500,
+  "pesq_wb_exclusions": 0,
+
+  "note_snr_substitution": "PS26052 states 'SNR > 15 dB' as a target. The evaluation uses SI-SNR (Scale-Invariant Signal-to-Noise Ratio) as the practical measurable substitute, because SI-SNR is computed against the paired clean reference (clean_ref_path) from the mixed corpus and is scale-invariant, making it a more rigorous and reproducible substitute than raw segSNR for this synthetic-dataset evaluation. This substitution is stated explicitly and does not apply to any claim about raw SNR on real hardware.",
+
+  "note_pesq_snr_conditional": "PESQ-WB is SNR-input-dependent: at higher input SNR the model has less noise to suppress and its outputs score higher. Per-SNR conditional breakdowns are shown in the supplementary section below for context, but the compliance verdict uses the full category mean across all 5 input SNR levels (-5 to +15 dB), which is the correct aggregate for a dataset evaluation.",
+
+  "targets": {
+    "SI_SNR_dB": {"threshold": 15.0, "criterion": "greater_than"},
+    "STOI": {"threshold": 0.85, "criterion": "greater_than"},
+    "PESQ_WB": {"threshold": 2.5, "criterion": "greater_than"}
+  },
+
+  "results": {
+    "stationary": {
+      "SI_SNR_mean_dB": 16.1387,
+      "SI_SNR_pass": true,
+      "SI_SNR_verdict": "PASS",
+      "STOI_mean": 0.9169,
+      "STOI_pass": true,
+      "STOI_verdict": "PASS",
+      "PESQ_WB_mean": 2.4823,
+      "PESQ_WB_pass": false,
+      "PESQ_WB_verdict": "FAIL",
+      "PESQ_WB_note": "2.4823 < 2.5 target. Miss margin: 0.018. Passes at +10 dB input SNR (mean 2.76) and +15 dB (mean 2.92) but fails across the full -5 to +15 dB range."
+    },
+    "non_stationary": {
+      "SI_SNR_mean_dB": 10.7485,
+      "SI_SNR_pass": false,
+      "SI_SNR_verdict": "FAIL",
+      "SI_SNR_note": "10.75 dB < 15 dB target. Non-stationary noise (helicopter/crowd) is harder to suppress; DeepFilterNet3 trained primarily on stationary noise profiles.",
+      "STOI_mean": 0.8297,
+      "STOI_pass": false,
+      "STOI_verdict": "FAIL",
+      "STOI_note": "0.8297 < 0.85 target. Miss margin: 0.020.",
+      "PESQ_WB_mean": 2.1303,
+      "PESQ_WB_pass": false,
+      "PESQ_WB_verdict": "FAIL",
+      "PESQ_WB_note": "2.1303 < 2.5 target. Miss margin: 0.370. Largest gap across all categories."
+    },
+    "impulsive": {
+      "SI_SNR_mean_dB": 15.1950,
+      "SI_SNR_pass": true,
+      "SI_SNR_verdict": "PASS",
+      "STOI_mean": 0.9196,
+      "STOI_pass": true,
+      "STOI_verdict": "PASS",
+      "PESQ_WB_mean": 2.4916,
+      "PESQ_WB_pass": false,
+      "PESQ_WB_verdict": "FAIL",
+      "PESQ_WB_note": "2.4916 < 2.5 target. Miss margin: 0.008. Narrowest miss; passes at +10 dB input SNR (mean 2.76) and +15 dB (mean 2.92)."
+    }
+  },
+
+  "overall_summary": {
+    "SI_SNR": "2 of 3 categories PASS (stationary, impulsive). Non-stationary FAILS at 10.75 dB.",
+    "STOI": "2 of 3 categories PASS (stationary, impulsive). Non-stationary FAILS at 0.83.",
+    "PESQ_WB": "0 of 3 categories PASS overall. Stationary and impulsive narrowly miss (2.48, 2.49). Non-stationary substantially misses (2.13).",
+    "verdict": "DeepFilterNet3 meets DRDO targets on stationary and impulsive noise for SI-SNR and STOI. All categories fall short of PESQ-WB > 2.5 on the full SNR-averaged evaluation. Non-stationary noise is the most significant remaining gap across all three metrics."
+  },
+
+  "supplementary_pesq_by_snr_deepfilternet": {
+    "note": "SNR-conditional slice — illustrative, not the compliance verdict",
+    "snr_-5dB": {"mean_pesq_wb": 1.592, "n": 60},
+    "snr_0dB":  {"mean_pesq_wb": 2.094, "n": 60},
+    "snr_5dB":  {"mean_pesq_wb": 2.471, "n": 60},
+    "snr_10dB": {"mean_pesq_wb": 2.760, "n": 60, "pct_above_2_5": "76.7%"},
+    "snr_15dB": {"mean_pesq_wb": 2.923, "n": 60, "pct_above_2_5": "85.0%"}
+  }
+}
