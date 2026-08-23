@@ -74,3 +74,30 @@ To isolate the exact contribution of the sample alignment fix versus step-size d
 2. **AI/ML vs Classical DSP Narrative**:
    - On stationary background noise, classical NLMS delivers solid performance (**+3.97 dB ΔSI-SNR**, **0.9010 STOI**).
    - On impulsive defence noise (gunshot/artillery), NLMS degrades by **-3.30 dB ΔSI-SNR** due to convergence lag on rapid acoustic transients. DeepFilterNet maintains **+10.19 dB ΔSI-SNR** and **2.49 PESQ-WB**, proving the essential value of deep learning for defence-critical speech enhancement.
+
+---
+
+## CORRECTION NOTE — 2026-08-23 (Phase 4 Closeout)
+
+> [!WARNING]
+> **Language corrected in this note. Original section 4.1 above is preserved for the record.**
+
+**What was wrong:** Section 4.1 originally stated the DRDO PESQ > 2.5 target was "(meeting the DRDO PESQ > 2.5 benchmark requirement)". This was incorrect on two counts:
+1. The cited values of 2.48–2.49 are **below** the 2.5 threshold.
+2. The sentence cited only the SNR-conditional slice (PESQ at +10/+15 dB input SNR) to support a claim framed as if it applied to the overall evaluation.
+
+**Corrected findings** (from `results/final/target_compliance.md`):
+
+| Category | PESQ-WB Mean | Target | Verdict |
+|---|---|---|---|
+| Stationary | 2.4823 | > 2.5 | FAIL (miss: −0.018) |
+| Non-stationary | 2.1303 | > 2.5 | FAIL (miss: −0.370) |
+| Impulsive | 2.4916 | > 2.5 | FAIL (miss: −0.008) |
+
+PESQ-WB > 2.5 is not met in any category on the full SNR-averaged evaluation. The SNR-conditional analysis (PESQ 2.76–2.92 at +10/+15 dB input SNR) is legitimate supplementary analysis, correctly labeled as such in `target_compliance.md`.
+
+**NLMS labeling correction:** NLMS is a **reference-assisted adaptive filter baseline** (oracle second-channel noise reference). It is not a single-channel method and must not be ranked alongside Spectral Subtraction, Wiener, and DeepFilterNet as if input assumptions were equivalent.
+
+**Terminology correction:** The system is AI/ML-enabled adaptive **noise suppression / speech enhancement** (single-channel). "ANC" is retained only where it mirrors PS26052's own problem-statement language.
+
+Full compliance matrix: [`results/final/target_compliance.md`](file:///d:/Coding/defence_anc/results/final/target_compliance.md) | [`results/final/target_compliance.json`](file:///d:/Coding/defence_anc/results/final/target_compliance.json)
