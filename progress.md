@@ -9,11 +9,11 @@
 - Next immediate action: Receive Pi 5 benchmark results from user, log Pi-measured RTF, update `architecture.md` component table, and finalize Phase 1.
 
 ## LOG
-### 2026-08-23 — PyTorch 2.6+ / Python 3.13 Compatibility Fix (df_compat.py)
+### 2026-08-23 — PyTorch 2.6+ / Python 3.13 SoundFile I/O Isolation Fix (df_compat.py)
 - Phase/Task: Phase 1 (Pi Compatibility Fix)
-- What I did: Resolved `ModuleNotFoundError: No module named 'torchaudio.backend'` and `AttributeError: module 'torchaudio' has no attribute 'info'` occurring on Python 3.13 / PyTorch 2.6+ by implementing soundfile-backed I/O polyfill in [df_compat.py](file:///d:/Coding/defence_anc/models/deepfilternet/df_compat.py). Updated `benchmark_rtf.py` and `run_inference.py`.
+- What I did: Completely decoupled DeepFilterNet from `torchaudio` file I/O by overriding `df.io.load_audio`, `df.io.save_audio`, `ta.load`, `ta.save`, and `ta.info` with pure `soundfile` + `torch` implementations in [df_compat.py](file:///d:/Coding/defence_anc/models/deepfilternet/df_compat.py). Eliminates `torchcodec` and `torchaudio.backend` errors.
 - Command(s) run and by whom (agent/user): agent: `uv run python models/deepfilternet/run_inference.py --self-test`
-- Evidence: Self-test and benchmark script passed cleanly using soundfile I/O polyfills.
+- Evidence: Self-test and benchmark script passed cleanly with complete `soundfile` I/O isolation.
 - Result: PASS
 - Files changed: `models/deepfilternet/df_compat.py`, `models/deepfilternet/benchmark_rtf.py`, `models/deepfilternet/run_inference.py`, `progress.md`
 - Next step: User pulls update on Pi and re-runs `benchmark_rtf.py`.
