@@ -50,3 +50,12 @@
 
 27. Any anomalous or surprising result must be root-caused against the actual code and data before being explained in a report. A plausible-sounding narrative must not be presented as a finding unless it has been checked against the specific implementation in use — if the explanation describes a limitation the actual architecture doesn't have (e.g. citing single-channel/no-reference limitations for a design that uses a true separate reference channel), it must be corrected, not repeated.
 28. All required metrics for a phase (here: PESQ-WB, STOI, SI-SNR, ΔSI-SNR) must be visibly present for every method/category cell in the summary table, or explicitly marked as unavailable with a quantified, evidenced failure count — never silently omitted with no trace.
+
+---
+## Phase 5 Rules Addendum
+
+29. Any test requiring live/physical audio hardware (microphone input, headphone output, physical loopback) is Mode B by default — hand off the exact command, wait for real pasted-back output, never mark it passed from code review alone.
+30. `lookahead_samples` (and any other model-timing property used for bypass alignment) must be measured empirically via the same click/cross-correlation method as the physical latency test, with the evidence logged — not asserted from model documentation or config alone.
+31. NLMS results are reported on a separate reference-assisted track from the single-channel methods (Spectral Subtraction, Wiener, DeepFilterNet) in any future comparison — never blended into one ranking as if the input assumptions were equivalent.
+32. The system is described in technical documentation as AI/ML-enabled adaptive noise suppression / speech enhancement, not as true active noise cancellation (ANC in the acoustic anti-noise sense), unless secondary-path cancellation hardware is actually implemented.
+33. Latency and other real-time performance numbers are reported exactly as measured on real hardware, even if below target — never adjusted or re-parameterized solely to produce a passing number without disclosing that a target was missed.
