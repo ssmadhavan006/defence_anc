@@ -1,0 +1,60 @@
+# audio_config.yaml
+# PS26052 — Phase 5 Live Pipeline Audio Configuration
+# Edit this file to match the physical hardware at demo time.
+# All units are SI unless noted.
+
+audio:
+  # Sample rate used by DeepFilterNet. Must NOT be changed without re-testing.
+  sample_rate: 48000
+
+  # Number of audio channels on the physical I/O device.
+  # 1 = mono (USB mic / TRRS), 2 = stereo (line-in or USB audio interface).
+  channels: 1
+
+  # Processing chunk duration in seconds.
+  # Smaller = lower latency, higher CPU. Keep >= 0.05 on Pi.
+  # DFN3 expects at least 1 frame (10 ms). 0.1 s is a safe starting value.
+  chunk_duration_sec: 0.1
+
+  # Derived — do not edit; the code computes these at startup.
+  # chunk_samples = sample_rate * chunk_duration_sec  → 4800 @ 48 kHz / 0.1 s
+  # hop_samples = chunk_samples (non-overlapping ring buffer design)
+
+  # Ring buffer duration in seconds.
+  # Must be >= chunk_duration_sec * 4 to avoid wrap-around drops under transient load.
+  ring_buffer_duration_sec: 2.0
+
+  # I/O device selection.
+  # Set to null to use the system default device.
+  # Set to an integer device index (from `python -m sounddevice`) or a
+  # partial string match to the device name.
+  # Example: "USB Audio" or 3
+  input_device: null
+  output_device: null
+
+model:
+  # DeepFilterNet model variant. Only "DeepFilterNet3" is validated.
+  variant: "DeepFilterNet3"
+
+  # Attenuation limit passed to df.enhance().
+  # Range: 0–100 dB. 100 = full suppression, 0 = bypass.
+  atten_lim_db: 100
+
+  # Post-enhancement gain correction (linear, applied after enhance()).
+  # Use 1.0 unless there is a measured level mismatch.
+  output_gain: 1.0
+
+pipeline:
+  # Operating mode:
+  #   "enhance"  — run DeepFilterNet on every chunk (default)
+  #   "bypass"   — pass audio through without processing (for latency baseline)
+  mode: "enhance"
+
+  # Enable chunk-level timing logs to stderr (useful for latency profiling).
+  log_timing: false
+
+  # Maximum allowable end-to-end latency before a warning is logged (seconds).
+  latency_warn_sec: 0.30
+
+  # Number of warmup inference passes on startup (prevent first-chunk jitter).
+  warmup_passes: 3
