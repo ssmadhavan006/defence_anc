@@ -13,6 +13,8 @@ PS26052/
 │   ├── nlms/
 │   ├── spectral_subtraction/
 │   └── wiener/
+├── config/
+│   └── audio_config.yaml
 ├── data/
 │   ├── SOURCES.md
 │   ├── manifest.csv
@@ -34,6 +36,10 @@ PS26052/
 ├── docs/
 ├── eval/
 ├── live/
+│   ├── ring_buffer.py
+│   ├── inference_engine.py
+│   ├── pipeline.py
+│   └── latency_test.py
 ├── models/
 │   └── deepfilternet/
 ├── results/
@@ -59,7 +65,11 @@ graph LR
 | NLMS Adaptive Filter Baseline | First-principles sample-by-sample NLMS adaptive filter | `numba`, `numpy`, `soundfile` | Computer: 300 files in 7.87s (0.026s/file). Strictly uses true pre-mix reference noise (`noise_id`, Rule 18). |
 | Evaluation Engine | Objective metrics calculation (PESQ-WB, STOI, SI-SNR, ΔSI-SNR) | `pystoi`, `matplotlib`, `seaborn`, `pandas`, `torch` | Computer: Evaluated 1,500 condition-mixture pairs (5 methods × 300 mixtures). |
 | DSP Baselines | Benchmark comparison against classical filters | Python (`scipy`, `numpy`) | Computer |
-| Live Pipeline | Real-time audio stream processing | `sounddevice`, `numpy` | Raspberry Pi 5 |
+| Live Pipeline Config | Centralised config for SR, chunk size, ring buffer, device, mode | `pyyaml` | Config file: `config/audio_config.yaml` |
+| RingBuffer | Thread-safe SPSC circular audio buffer | `numpy`, `threading` | Both (no hardware needed). Overflow drops oldest samples. |
+| InferenceEngine | Stateful DFN3 wrapper: load, warmup, chunk-by-chunk enhance/bypass | `deepfilternet`, `torch` | Both (Mode A verified on PC). Dev machine: median RTF=0.093, p95=0.095 per 100 ms chunk. |
+| LivePipeline | Sounddevice stream + RingBuffer + InferenceThread orchestration | `sounddevice`, `numpy` | Raspberry Pi 5 (Mode B — requires physical audio hardware) |
+| LatencyTest | Click cross-correlation latency measurement (Mode A + Pi) | `numpy`, `scipy` | Both. Dev machine: enhance median=9.77 ms, bypass ~0 ms, lag=0 samples. |
 
 ## Future Augmentation TODOs (Phase 5+)
 - [ ] Add room impulse response (RIR) reverberation convolution.
@@ -88,3 +98,5 @@ graph LR
   - *DeepFilterNet DRDO Benchmark Verification:* DeepFilterNet achieved **2.48–2.49 overall PESQ-WB mean** (reaching **2.76 PESQ-WB at +10 dB SNR** and **2.92 PESQ-WB at +15 dB SNR**, meeting the DRDO PESQ > 2.5 requirement), **0.9169–0.9196 STOI**, and **+5.75 to +11.10 dB ΔSI-SNR**.
   - *Un-Confounded NLMS Ablation:* Isolated alignment fix (`combo_seed`) from step-size damping ($\mu = 0.10 \to 0.01$). Alignment alone improved ΔSI-SNR by $+1.76\text{ to }+2.19\text{ dB}$, while step-size damping ($\mu = 0.01$) prevented speech formant tracking, unlocking $+3.97\text{ dB}$ ΔSI-SNR on stationary noise.
   - *Impulsive Zero-Lag Check:* Confirmed 0-sample cross-correlation lag on impulsive clips; NLMS $-3.30\text{ dB}$ ΔSI-SNR is a true structural convergence lag on rapid acoustic transients, validating the core pitch for AI/ML ANC. All deliverables updated (`results/eval_raw.csv`, `results/results.csv`, `results/charts/`, `docs/phase_4_summary.md`).
+- **2026-08-23 (Phase 4 Closeout):** Built `results/final/target_compliance.md` + `.json` with honest per-category PASS/FAIL verdicts. Corrected phase_4_summary.md (PESQ > 2.5 target not met in any category on full SNR-averaged evaluation). Applied NLMS reference-assisted labeling and ANC -> noise suppression/speech enhancement terminology corrections. Rules 29-33 appended.
+- **2026-08-23 (Phase 5 Mode A):** Built live pipeline stack: `config/audio_config.yaml`, `live/ring_buffer.py` (SPSC ring buffer, 6-test self-test PASS), `live/inference_engine.py` (DFN3 wrapper, 6-test self-test PASS, dev machine RTF=0.093), `live/pipeline.py` (streaming orchestrator), `live/latency_test.py` (click cross-correlation, enhance=9.77 ms median wall, 0-sample lag, bypass ~0 ms). All Mode A tests verified on dev machine. Mode B (Pi hardware) tests pending.

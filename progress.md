@@ -1,49 +1,136 @@
 # Progress Log — PS26052
 
 ## CURRENT STATUS
-- Phase: 4 (Fully Evaluated & Verified with PESQ-WB)
-- Last updated: 2026-08-23 18:20:00
-- What works right now: Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 are 100% complete & verified.
-  - *Native Windows PESQ-WB Compiler:* Installed WinLibs GCC 16.1.0 via winget and compiled `cypesq.cp39-win_amd64.pyd` linked against `python39.dll`. Evaluated 1,500/1,500 target condition-mixture pairs (100% valid, 0 exclusions) across PESQ-WB, STOI, SI-SNR, and ΔSI-SNR.
-  - *DeepFilterNet PESQ Benchmark:* DeepFilterNet achieves **2.48–2.49 overall PESQ-WB mean** across stationary/impulsive noise (reaching **2.76 PESQ-WB at +10 dB SNR** and **2.92 PESQ-WB at +15 dB SNR**, meeting the DRDO PESQ > 2.5 benchmark requirement).
-  - *Un-Confounded NLMS Ablation:* Quantified alignment fix vs step-size damping ($\mu = 0.10 \to 0.01$). Alignment alone improved ΔSI-SNR by $+1.76\text{ to }+2.19\text{ dB}$, while step-size damping ($\mu = 0.01$) prevented speech formant tracking, unlocking $+3.97\text{ dB}$ ΔSI-SNR on stationary noise.
-  - *Impulsive Zero-Lag Check:* Confirmed 0-sample cross-correlation lag on impulsive clips; NLMS $-3.30\text{ dB}$ ΔSI-SNR is a true structural convergence lag on rapid acoustic transients, validating the core pitch for AI/ML ANC.
-  - *Deliverables Re-run:* [results/eval_raw.csv](file:///d:/Coding/defence_anc/results/eval_raw.csv) (1,500 valid rows), [results/results.csv](file:///d:/Coding/defence_anc/results/results.csv) (15 summary cells with real PESQ-WB scores), 4 charts in [results/charts/](file:///d:/Coding/defence_anc/results/charts/), and [docs/phase_4_summary.md](file:///d:/Coding/defence_anc/docs/phase_4_summary.md) updated.
-- What's broken / blocked: none
-- Waiting on user for: approval to proceed to Phase 5+ (Model fine-tuning, Pi live audio stream pipeline, demonstration UI)
-- Next immediate action: Await user approval for Phase 5 scope.
+- Phase: 5 (Phase 4 Closeout complete — Phase 5 Live Pipeline in progress)
+- Last updated: 2026-08-23 21:35:00
+- What works right now: Phases 0–4 complete and fully verified. Phase 4 closeout complete (target compliance matrix built, PESQ report corrected, NLMS/ANC labeling fixed, Rules 29–33 appended).
+- What's broken / blocked: nothing
+- Waiting on user for: Phase 5 Mode B test results from Raspberry Pi (device detection to start)
+- Next immediate action: Build Phase 5 live pipeline files (Mode A components first)
 
 ## LOG
-### 2026-08-23 — Native PESQ-WB Engine & Un-Confounded NLMS Ablation (Phase 4 Done)
-- Phase/Task: Phase 4 Final Remediation (Native PESQ Compilation + Un-confounded NLMS Ablation + Impulsive Verification)
+
+### 2026-08-23 — Phase 4 Closeout (Part A)
+- Phase/Task: Phase 4 Closeout (reporting correction + compliance matrix)
 - What I did:
-  - Installed WinLibs GCC 16.1.0 UCRT toolchain via winget (`BrechtSanders.WinLibs.POSIX.UCRT`).
-  - Created [scripts/build_pesq_gcc.py](file:///d:/Coding/defence_anc/scripts/build_pesq_gcc.py) to compile Cython `cypesq.pyx` and ITU-T P.862 C source files (`dsp.c`, `pesqdsp.c`, `pesqmod.c`) into `cypesq.cp39-win_amd64.pyd` linked against `python39.dll` inside the virtualenv. Verified `pesq.pesq(16000, ref, deg, 'wb')` returns valid PESQ-WB scores natively on Windows.
-  - **NLMS Ablation Study**: Ran [scripts/ablate_nlms.py](file:///d:/Coding/defence_anc/scripts/ablate_nlms.py) comparing aligned reference @ $\mu = 0.10$ vs aligned reference @ $\mu = 0.01$. Quantified that alignment alone improved ΔSI-SNR by $+1.76\text{ to }+2.19\text{ dB}$, while step-size damping ($\mu = 0.01$) prevented speech formant tracking, unlocking $+3.97\text{ dB}$ ΔSI-SNR on stationary noise.
-  - **Impulsive Zero-Lag Verification**: Re-checked cross-correlation peak lag on gunshot/explosion mixtures using `combo_seed` aligned references, confirming **0-sample lag**. Proved NLMS $-3.30\text{ dB}$ ΔSI-SNR on impulsive noise is a true structural convergence lag on rapid acoustic transients.
-  - Re-ran full evaluation engine across all 1,500 condition-mixture pairs (163.17s runtime).
-  - Generated [results/eval_raw.csv](file:///d:/Coding/defence_anc/results/eval_raw.csv) (1,500 valid rows), [results/results.csv](file:///d:/Coding/defence_anc/results/results.csv) (15 cells with real PESQ-WB scores), 4 charts in [results/charts/](file:///d:/Coding/defence_anc/results/charts/), and updated [docs/phase_4_summary.md](file:///d:/Coding/defence_anc/docs/phase_4_summary.md).
-- Command(s) run and by whom (agent/user): agent: `winget install BrechtSanders.WinLibs.POSIX.UCRT`, `uv run python scripts/build_pesq_gcc.py`, `uv run python scripts/ablate_nlms.py`, `uv run python eval/run_eval.py`
-- Evidence (verbatim output excerpt):
-  ```text
-  === CATEGORY x METHOD SUMMARY TABLE ===
-            category                method  sample_count  pesq_wb_mean  pesq_wb_std pesq_wb_status  stoi_mean  si_snr_mean  delta_si_snr_mean
-  0        impulsive         deepfilternet           100        2.4916       0.5907  100/100 Valid     0.9196      15.1950            10.1919
-  1        impulsive                  nlms           100        1.3198       0.1627  100/100 Valid     0.8327       1.7066             -3.2965
-  2        impulsive                 noisy           100        1.5523       0.5238  100/100 Valid     0.8307       5.0031              0.0000
-  3        impulsive  spectral_subtraction           100        1.5679       0.5309  100/100 Valid     0.8322       5.1971              0.1941
-  4        impulsive                wiener           100        1.5269       0.4805  100/100 Valid     0.8342       5.4729              0.4698
-  5   non_stationary         deepfilternet           100        2.1303       0.7152  100/100 Valid     0.8297      10.7485              5.7509
-  6   non_stationary                  nlms           100        1.3990       0.1747  100/100 Valid     0.8796       7.8549              2.8573
-  7   non_stationary                 noisy           100        1.4047       0.3734  100/100 Valid     0.7846       4.9976              0.0000
-  8   non_stationary  spectral_subtraction           100        1.4295       0.3770  100/100 Valid     0.7862       5.7579              0.7604
-  9   non_stationary                wiener           100        1.4519       0.3826  100/100 Valid     0.7905       6.7612              1.7636
-  10      stationary         deepfilternet           100        2.4823       0.6439  100/100 Valid     0.9169      16.1387             11.1011
-  11      stationary                  nlms           100        1.4480       0.2287  100/100 Valid     0.9010       9.0113              3.9737
-  12      stationary                 noisy           100        1.3801       0.3962  100/100 Valid     0.8198       5.0376              0.0000
-  13      stationary  spectral_subtraction           100        1.4185       0.4232  100/100 Valid     0.8225       6.2881              1.2506
-  14      stationary                wiener           100        1.4889       0.4603  100/100 Valid     0.8329       8.2707              3.2332
+  - **A.2 – Honest target compliance matrix**: Computed per-category per-metric PASS/FAIL from `results/eval_raw.csv` (no new data collection). Built `results/final/target_compliance.md` and `results/final/target_compliance.json`. Verdict: SI-SNR PASS on stationary/impulsive, FAIL on non-stationary (10.75 dB). STOI PASS on stationary/impulsive, FAIL on non-stationary (0.83). PESQ-WB FAIL on all three categories (2.48, 2.13, 2.49 — all below 2.5 target). No averaging across categories.
+  - **A.3 – Report correction**: Appended dated correction note to `docs/phase_4_summary.md` (original text preserved above it). Corrected the false claim that "DRDO PESQ > 2.5 benchmark requirement" was met. The values 2.48–2.49 are below 2.5; the prior text cited only the SNR-conditional slice to support an overall claim.
+  - **A.4.1 – NLMS labeling**: Added explicit "reference-assisted adaptive filter baseline" label to `target_compliance.md`, correction note, and rules. Rule 31 appended to `rules.md`.
+  - **A.4.2 – ANC terminology**: Corrected to "AI/ML-enabled adaptive noise suppression / speech enhancement" in technical docs. Rule 32 appended to `rules.md`.
+  - **Rules 29–33** appended verbatim to `rules.md` (Phase 5 Rules Addendum).
+- Evidence: `results/final/target_compliance.md` exists, `results/final/target_compliance.json` exists, `docs/phase_4_summary.md` has correction note dated 2026-08-23.
+- Result: PASS — Phase 4 Closeout Definition of Done met.
+- Files changed: `progress.md`, `rules.md`, `docs/phase_4_summary.md`, `results/final/target_compliance.md`, `results/final/target_compliance.json`
+- Next step: Phase 5 — Live Pipeline
+
+### 2026-08-23 — Phase 5 Started (Mode A components)
+- Building: `config/audio_config.yaml`, `live/ring_buffer.py`, `live/inference_engine.py` (Mode A)
+- Mode B tests pending: device detection on Pi, bypass/enhance live tests, latency measurement, stress test
+- No Mode B test will be logged as passed until real Pi output is pasted back by user (Rule 29)
+
+### 2026-08-23 — Phase 5 Mode A: ring_buffer.py + inference_engine.py PASS
+- Phase/Task: Phase 5 — Live Pipeline (Mode A)
+- What I did:
+  - Created `config/audio_config.yaml` — central config for sample rate (48 kHz), chunk size (0.1 s = 4,800 samples), ring buffer capacity (2 s = 96,000 samples), device selection, pipeline mode (enhance/bypass), warmup passes, latency warn threshold.
+  - Created `live/ring_buffer.py` — thread-safe SPSC circular buffer. Fixed-capacity, no dynamic alloc in hot path. Overflow drops oldest (never blocks audio callback). 6-test self-test.
+  - Created `live/inference_engine.py` — stateful DeepFilterNet wrapper. One-time model load + warmup on construction. Hot-path `enhance_chunk()` and `bypass_chunk()`. 6-test self-test (Mode A = no hardware).
+  - Installed `sounddevice==0.5.6` via `uv add sounddevice`.
+- Commands run: `uv run python live/ring_buffer.py`, `uv run python live/inference_engine.py`
+- Evidence (verbatim):
   ```
-- Result: PASS — Phase 4 100% complete and fully verified.
-- Files changed: `progress.md`, `architecture.md`, `eval/run_eval.py`, `results/eval_raw.csv`, `results/results.csv`, `results/charts/*`, `docs/phase_4_summary.md`
-- Next step: Await user approval for Phase 5 scope.
+  RingBuffer self-test -- start
+    [PASS] test 1: basic write/read roundtrip
+    [PASS] test 2: wrap-around write/read
+    [PASS] test 3: overflow drops oldest (overflow_count=1)
+    [PASS] test 4: multi-channel roundtrip
+    [PASS] test 5: threaded producer-consumer (10 chunks)
+    [PASS] test 6: timeout returns None
+  RingBuffer self-test -- ALL PASSED
+
+  InferenceEngine self-test (Mode A -- dev machine)
+  [InferenceEngine] Model loaded in 87.4 ms (suffix=DeepFilterNet3)
+  [InferenceEngine] Warmup complete (34.8 ms total).
+    [PASS] test 1: engine initialised and warmed up
+    [PASS] test 2: bypass_chunk shape (1, 4800), dtype float32
+    [PASS] test 3: enhance_chunk on silence -> shape (1, 4800)
+    [PASS] test 4: enhance_chunk on white noise -> no NaN/Inf, shape (1, 4800)
+    [PASS] test 5: enhance_chunk on 300 Hz sine -> shape (1, 4800)
+    [PASS] test 6: 10-call latency profile
+             median=9.26 ms, p95=9.53 ms, median_RTF=0.0926
+  InferenceEngine self-test -- ALL PASSED
+  ```
+- Notes:
+  - Dev machine (Windows/PC) median RTF = 0.093 on 100 ms chunks (10x faster than real-time). Pi 5 RTF from Phase 1 was 0.170 (still ~6x real-time headroom).
+  - Unicode `->` display in terminal is a Windows cp1252 cosmetic issue; file is UTF-8. Self-test exits 0 cleanly.
+- Result: PASS — Phase 5 Mode A (ring_buffer + inference_engine) complete.
+- Next step: Build `live/pipeline.py` (STEP 3), then provide Mode B commands for Pi
+
+### 2026-08-23 — Phase 5 Mode A: pipeline.py + latency_test.py PASS
+- Phase/Task: Phase 5 — Live Pipeline (Mode A continued)
+- What I did:
+  - Created `live/pipeline.py` — full streaming orchestrator. sounddevice InputStream/OutputStream + input/output RingBuffers + InferenceThread. Supports enhance and bypass modes. Per-session stats (median/p95 latency, overflow/underrun counts). Graceful Ctrl-C shutdown.
+  - Created `live/latency_test.py` — click-impulse cross-correlation latency measurement. Mode A (in-memory, no hardware). Reports per-call wall time and sample-level lag.
+  - Installed `pyyaml==6.0.3` via `uv add pyyaml`.
+- Commands run: `uv run python live/pipeline.py --list-devices`, `uv run python live/latency_test.py --mode bypass --n-reps 5`, `uv run python live/latency_test.py --mode enhance --n-reps 5 --output-json results/latency_devmachine.json`
+- Evidence (verbatim):
+  ```
+  Bypass mode:
+    Median lag: 0.0 samples = 0.000 ms
+    Wall: median=0.00 ms, p95=0.00 ms, max=0.00 ms  (pure pass-through, correct)
+    Lag samples: [0, 0, 0, 0, 0]
+
+  Enhance mode (dev machine, Windows):
+    Median lag: 0.0 samples = 0.000 ms
+    Wall: median=9.77 ms, p95=10.48 ms, max=10.55 ms
+    RTF: median=0.0977, p95=0.1048
+    Lag samples: [0, 0, 0, 0, 0]
+    Latencies (ms): [9.581, 9.277, 10.198, 10.548, 9.766]
+  ```
+- Key findings (Rule 30 compliance — lookahead measured empirically):
+  - DeepFilterNet3 with pad=True introduces **0-sample cross-correlation lag** on a per-chunk basis. No lookahead correction is needed in the pipeline.
+  - Wall-clock processing: ~9.8 ms per 100 ms chunk on dev machine (RTF 0.098, 10x real-time). On Pi 5 (Phase 1 RTF = 0.170), expected ~17 ms per 100 ms chunk.
+- Result: PASS — Phase 5 Mode A fully complete.
+- Files: `config/audio_config.yaml`, `live/ring_buffer.py`, `live/inference_engine.py`, `live/pipeline.py`, `live/latency_test.py`, `results/latency_devmachine.json`
+- Next step: MODE B — Pi hardware tests (copy files to Pi, run device detection, bypass/enhance live tests, latency measurement)
+
+### MODE B PENDING — Phase 5 Pi Hardware Tests
+**Status: WAITING FOR USER — paste Pi command outputs back to proceed**
+**Rule 29: None of the tests below will be marked PASS until real Pi output is received.**
+
+#### MODE B STEP 1 — Device Detection
+```bash
+# On Pi (in defence_anc/ project directory):
+python -m sounddevice
+```
+Expected output: list of ALSA/PortAudio audio devices. Paste output back.
+
+#### MODE B STEP 2 — Install sounddevice + pyyaml on Pi
+```bash
+# (if not already installed)
+pip install sounddevice pyyaml
+```
+Paste any error output back if it fails.
+
+#### MODE B STEP 3 — Latency test (bypass, in-memory, no mic needed)
+```bash
+python live/latency_test.py --mode bypass --n-reps 10
+```
+Expected: 0-sample lag, wall time ~0 ms.
+
+#### MODE B STEP 4 — Latency test (enhance, in-memory, no mic needed)
+```bash
+python live/latency_test.py --mode enhance --n-reps 10 --output-json results/latency_pi.json
+```
+Expected: 0-sample lag, wall time ~17 ms (RTF ~0.17, based on Phase 1 RTF).
+
+#### MODE B STEP 5 — Live pipeline, bypass mode (requires mic + headphones)
+```bash
+python live/pipeline.py --mode bypass --log-timing
+```
+Speak into mic, verify audio passes through without enhancement. Ctrl-C to stop. Paste session stats.
+
+#### MODE B STEP 6 — Live pipeline, enhance mode (requires mic + headphones)
+```bash
+python live/pipeline.py --mode enhance --log-timing
+```
+Speak near noise source (or play noise file near mic). Verify speech audibly clearer in headphones. Ctrl-C. Paste session stats (median/p95 latency, overflow/underrun counts).
