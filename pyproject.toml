@@ -1,0 +1,15 @@
+[project]
+name = "ps26052-anc"
+version = "0.1.0"
+description = "AI/ML-enabled Adaptive Noise Cancellation for Defence Communications (DRDO PS26052)"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "deepfilternet>=0.5.6",
+    "soundfile>=0.13.1",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+]
+
+[tool.uv]
+package = false

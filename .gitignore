@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data artifacts
+data/mixtures/
+data/**/*.wav
+*.wav
+
+# Results
+results/*.csv
+results/*.json
+
+# Model weights / checkpoints
+*.pt
+*.onnx
+*.bin
+*.pth
+*.ckpt
+models/**/*.pt
+models/**/*.onnx
