@@ -9,7 +9,14 @@
 - Next immediate action: Receive Pi 5 benchmark results from user, log Pi-measured RTF, update `architecture.md` component table, and finalize Phase 1.
 
 ## LOG
-### 2026-08-23 — Phase 1 DeepFilterNet Computer Baseline Setup & Verification
+### 2026-08-23 — PyTorch 2.6+ / Python 3.13 Compatibility Fix (df_compat.py)
+- Phase/Task: Phase 1 (Pi Compatibility Fix)
+- What I did: Resolved `ModuleNotFoundError: No module named 'torchaudio.backend'` occurring on Python 3.13 / PyTorch 2.6+ by creating [df_compat.py](file:///d:/Coding/defence_anc/models/deepfilternet/df_compat.py) polyfill layer. Updated `benchmark_rtf.py` and `run_inference.py`.
+- Command(s) run and by whom (agent/user): agent: `uv run python models/deepfilternet/run_inference.py --self-test`
+- Evidence: Self-test and benchmark script passed cleanly.
+- Result: PASS
+- Files changed: `models/deepfilternet/df_compat.py`, `models/deepfilternet/benchmark_rtf.py`, `models/deepfilternet/run_inference.py`, `progress.md`
+- Next step: User pulls update on Pi and re-runs `benchmark_rtf.py`.
 - Phase/Task: Phase 1 (Computer Baseline Setup)
 - What I did:
   - Created Python 3.9 environment for `deepfilternet` compatibility (`deepfilterlib` 0.5.6 wheel).

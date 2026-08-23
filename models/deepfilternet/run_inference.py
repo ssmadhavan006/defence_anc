@@ -4,8 +4,10 @@ import time
 import argparse
 import torch
 import soundfile as sf
-from df.enhance import init_df, enhance
-from df.io import load_audio, save_audio
+try:
+    from models.deepfilternet.df_compat import init_df, enhance, load_audio, save_audio
+except ImportError:
+    from df_compat import init_df, enhance, load_audio, save_audio
 
 def process_file(model, df_state, input_path: str, output_path: str, atten_lim_db: float = None) -> float:
     """

@@ -6,8 +6,10 @@ import subprocess
 import numpy as np
 import torch
 import soundfile as sf
-from df.enhance import init_df, enhance
-from df.io import load_audio
+try:
+    from models.deepfilternet.df_compat import init_df, enhance, load_audio
+except ImportError:
+    from df_compat import init_df, enhance, load_audio
 
 def get_cpu_temp() -> float:
     """
