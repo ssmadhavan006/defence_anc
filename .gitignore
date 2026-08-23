@@ -23,3 +23,12 @@ results/*.json
 *.ckpt
 models/**/*.pt
 models/**/*.onnx
+
+# Downloaded dataset sources & archives (regenerable via scripts/download_datasets.py)
+data/clean/
+data/downloads/
+data/temp_esc50/
+data/noise/**/*.csv
+
+# Native PESQ build workspace (scripts/build_pesq_gcc.py)
+results/pesq_build/
