@@ -5,10 +5,18 @@ description = "AI/ML-enabled Adaptive Noise Cancellation for Defence Communicati
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 dependencies = [
+    "cython>=3.3.0",
     "deepfilternet>=0.5.6",
+    "matplotlib>=3.9.4",
+    "numba>=0.60.0",
+    "pandas>=2.3.3",
+    "pystoi>=0.4.1",
+    "scipy>=1.13.1",
+    "seaborn>=0.13.2",
     "soundfile>=0.13.1",
     "torch==2.5.1",
     "torchaudio==2.5.1",
+    "torchmetrics>=1.8.2",
 ]
 
 [tool.uv]
