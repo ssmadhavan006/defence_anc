@@ -68,6 +68,53 @@ def batch_inference(input_dir: str, output_dir: str, atten_lim_db: float = None,
     print(f"Batch processing complete. Enhanced {len(processed)} file(s).")
     return processed
 
+def process_manifest(
+    manifest_path: str = "data/manifest.csv",
+    output_dir: str = "results/baselines/deepfilternet",
+    limit: int = None,
+    post_filter: bool = False,
+    atten_lim_db: float = None,
+) -> list:
+    """
+    Processes mixtures listed in manifest.csv through DeepFilterNet.
+    Saves outputs to output_dir/<mix_filename>.
+    Idempotent / resumable: skips already existing files.
+    """
+    import csv
+    print(f"Initializing DeepFilterNet model for manifest processing (post_filter={post_filter})...")
+    model, df_state, suffix = init_df(post_filter=post_filter, log_level="ERROR")
+    target_sr = df_state.sr()
+
+    with open(manifest_path, "r", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if limit is not None and limit < len(rows):
+        rows = rows[:limit]
+
+    os.makedirs(output_dir, exist_ok=True)
+    processed = []
+    skipped = 0
+
+    print(f"DeepFilterNet processing {len(rows)} mixture(s) to '{output_dir}'...")
+    t0_all = time.time()
+
+    for row in rows:
+        in_path = row["output_path"]
+        mix_filename = os.path.basename(in_path)
+        out_path = os.path.join(output_dir, mix_filename)
+
+        if os.path.exists(out_path):
+            skipped += 1
+            processed.append({"row": row, "output": out_path, "skipped": True, "elapsed": 0.0})
+            continue
+
+        elapsed = process_file(model, df_state, in_path, out_path, atten_lim_db=atten_lim_db)
+        processed.append({"row": row, "output": out_path, "skipped": False, "elapsed": elapsed})
+
+    total_time = time.time() - t0_all
+    print(f"DeepFilterNet processing finished in {total_time:.2f}s ({skipped} skipped, {len(processed) - skipped} processed).")
+    return processed
+
 def run_self_test():
     """
     Minimal self-test for run_inference.py pipeline correctness.
@@ -89,8 +136,10 @@ def run_self_test():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DeepFilterNet Batch Inference Pipeline")
+    parser.add_argument("--manifest", default="data/manifest.csv", help="Manifest path for dataset processing")
     parser.add_argument("--input-dir", "-i", default="data/mixtures", help="Input directory containing noisy wav files")
-    parser.add_argument("--output-dir", "-o", default="results/enhanced", help="Output directory for enhanced wav files")
+    parser.add_argument("--output-dir", "-o", default="results/baselines/deepfilternet", help="Output directory for enhanced wav files")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of files to process")
     parser.add_argument("--atten-lim", type=float, default=None, help="Noise attenuation limit in dB")
     parser.add_argument("--post-filter", "--pf", action="store_true", help="Enable DeepFilterNet post-filter")
     parser.add_argument("--self-test", action="store_true", help="Run self-test sanity check")
@@ -100,9 +149,10 @@ if __name__ == "__main__":
     if args.self_test:
         run_self_test()
     else:
-        batch_inference(
-            input_dir=args.input_dir,
+        process_manifest(
+            manifest_path=args.manifest,
             output_dir=args.output_dir,
-            atten_lim_db=args.atten_lim,
-            post_filter=args.post_filter
+            limit=args.limit,
+            post_filter=args.post_filter,
+            atten_lim_db=args.atten_lim
         )
