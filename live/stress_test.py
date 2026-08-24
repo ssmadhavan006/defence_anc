@@ -111,9 +111,15 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
         
     actual_duration = time.time() - start_time
     
-    # Process final stats
+    # Process final stats.
+    # _dropped_chunks counts ONLY underruns that happened while the pipeline
+    # was running. Underruns during the post-stop() drain are tracked
+    # separately and deliberately excluded from the verdict -- they are an
+    # unavoidable artifact of the output stream outliving the inference
+    # thread, not a real-time failure. (See pipeline._output_callback.)
     final_overflows = pipeline._in_buf.overflow_count
     final_underruns = pipeline._dropped_chunks
+    teardown_underruns = pipeline._teardown_underruns
     total_dropouts = final_overflows + final_underruns
     
     cpu_vals = [r["cpu_percent"] for r in records]
@@ -146,6 +152,7 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
         "max_temperature_c": round(max_temp, 2) if max_temp is not None else None,
         "total_overflows": final_overflows,
         "total_underruns": final_underruns,
+        "teardown_underruns": teardown_underruns,
         "total_dropouts": total_dropouts,
         "history": records
     }
@@ -160,6 +167,8 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
     if max_temp is not None:
         print(f"Max Temperature : {max_temp:.1f}°C")
     print(f"Total Dropouts  : {total_dropouts} ({final_overflows} overflows, {final_underruns} underruns)")
+    if teardown_underruns:
+        print(f"Shutdown Drain  : {teardown_underruns} underruns after stop() (expected, excluded from verdict)")
     print("==========================")
     
     if output_path:

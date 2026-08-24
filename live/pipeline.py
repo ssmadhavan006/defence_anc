@@ -254,7 +254,21 @@ class LivePipeline:
 
         # Timing stats.
         self._chunk_latencies = []   # seconds, enhance/bypass call only
+
+        # Output underruns are counted in TWO buckets, because they mean
+        # different things and only one of them is a real failure:
+        #   _dropped_chunks     -- starved while _running was set. A genuine
+        #                          real-time miss; this is what PASS/FAIL gates on.
+        #   _teardown_underruns -- starved after stop() cleared _running. The
+        #                          inference thread has already exited but the
+        #                          output stream keeps calling back until it is
+        #                          stopped, so it necessarily drains to empty.
+        #                          Expected shutdown behaviour, NOT a failure.
+        # Conflating these made every stress run report >=1 dropout and FAIL
+        # regardless of real-time health (observed 2026-08-24: 0 underruns at
+        # every 10 s checkpoint, final count 1).
         self._dropped_chunks = 0
+        self._teardown_underruns = 0
 
         # Last processed chunk, exposed for visual demos (e.g. demo/spectrogram.py).
         # Benign read/write race with the inference thread is acceptable here —
@@ -281,7 +295,12 @@ class LivePipeline:
         if chunk is None:
             # Buffer underrun — output silence to avoid glitches.
             outdata[:] = 0.0
-            self._dropped_chunks += 1
+            if self._running.is_set():
+                self._dropped_chunks += 1
+            else:
+                # Post-stop() drain: the inference thread is already gone, so
+                # an empty buffer here is expected, not a real-time miss.
+                self._teardown_underruns += 1
         else:
             # Apply output gain and write to device buffer.
             outdata[:] = chunk * self._output_gain
@@ -443,7 +462,8 @@ class LivePipeline:
             f"  RTF:     median={np.median(rtfs):.4f}, "
             f"p95={np.percentile(rtfs, 95):.4f}\n"
             f"  Input buffer overflows: {self._in_buf.overflow_count}\n"
-            f"  Output buffer underruns: {self._dropped_chunks}",
+            f"  Output buffer underruns: {self._dropped_chunks}"
+            f"  (+{self._teardown_underruns} during shutdown drain, not a failure)",
             file=sys.stderr,
         )
 

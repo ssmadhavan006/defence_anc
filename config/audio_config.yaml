@@ -28,10 +28,14 @@ audio:
   # Set to null to use the system default device (dev machine).
   # On Raspberry Pi 5 with snd-aloop loaded:
   #   run `python live/main.py detect` or `arecord -l` to confirm card numbers.
-  #   Both subdevices of card 2 (hw:2,0 and hw:2,1) support 32ch in+out.
-  #   Use index 0 for both (Loopback PCM hw:2,0) as a single full-duplex loopback.
-  # For a physical USB mic + headphones, set to the appropriate indices.
-  input_device: 0
+  # snd-aloop does NOT loop a device back to itself -- it cross-pairs the two
+  # PCM devices on the card: audio played to hw:2,0 arrives on the CAPTURE
+  # side of hw:2,1, and vice versa. Using the same index for input and output
+  # (as this file used to) is silent by construction -- confirmed on-device
+  # 2026-08-24 (e2e click test read back exact zeros: peak=0.0, noise=0.0).
+  # Play on device 0, capture on the paired device 1.
+  # For a physical USB mic + headphones, set to the appropriate indices instead.
+  input_device: 1
   output_device: 0
 
 model:
