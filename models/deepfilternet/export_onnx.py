@@ -71,6 +71,17 @@ sys.path.insert(0, ".")
 import torch
 import torch.nn as nn
 
+# Import df_compat FIRST, purely for its side effect: it monkeypatches
+# torchaudio.backend.common into sys.modules before df.io/df.enhance get
+# imported. Needed on platforms (confirmed: the Pi) where the installed
+# torchaudio build has already dropped that deprecated compatibility shim
+# entirely -- importing `df.enhance` directly there raises
+# ModuleNotFoundError: No module named 'torchaudio.backend'. Every other
+# module in this project already goes through this shim (see
+# live/inference_engine.py); this one didn't, and broke on the Pi as a
+# result (found 2026-08-24).
+import models.deepfilternet.df_compat  # noqa: F401
+
 from df.enhance import init_df, df_features, ModelParams
 from df.scripts.export import export_impl
 

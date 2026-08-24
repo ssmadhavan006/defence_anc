@@ -4,14 +4,27 @@
 
 sounddevice>=0.4.6
 soundfile>=0.12.1
-numpy>=1.22.0
+# deepfilternet 0.5.6 hard-requires numpy<2.0. It is NOT listed in this file
+# (assumed pre-installed, see above), so pip's resolver cannot see that
+# constraint on its own and will happily pick numpy 2.x to satisfy onnx/
+# onnxruntime below, silently breaking deepfilternet -- this actually
+# happened on the Pi 2026-08-24 (`pip install -r requirements.txt` upgraded
+# numpy 1.26.4 -> 2.5.2, pip printed a dependency-conflict warning but
+# installed it anyway). Pin the upper bound here so it can't recur.
+numpy>=1.22.0,<2.0
 pyyaml>=6.0
 psutil>=5.9.0
 matplotlib>=3.5.0
+scipy>=1.10.0
+numba>=0.58.0
 
 # P1-3: optional ONNX Runtime inference backend (live/inference_engine.py
 # backend="onnx"). Only needed if you run models/deepfilternet/export_onnx.py
 # and enable pipeline.inference_backend: onnx in audio_config.yaml — the
-# default PyTorch backend needs neither of these.
+# default PyTorch backend needs neither of these. Confirmed compatible with
+# numpy<2.0 (dev-machine `uv` resolution keeps numpy at 1.26.4 with these
+# installed) -- if pip ever wants to bump numpy past 2.0 to satisfy these,
+# that means a newer onnx/onnxruntime release changed its floor; re-verify
+# against deepfilternet's numpy<2.0 constraint before allowing it.
 onnx>=1.22.0
 onnxruntime>=1.29.0

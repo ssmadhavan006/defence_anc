@@ -40,6 +40,12 @@ import torch.nn.functional as F
 
 from numpy.lib.stride_tricks import sliding_window_view
 
+# Side effect: patches torchaudio.backend.common into sys.modules before any
+# df.* import touches it -- required on platforms (confirmed: the Pi) where
+# the installed torchaudio build no longer has that deprecated shim at all.
+# See export_onnx.py's identical comment for the full story.
+import models.deepfilternet.df_compat  # noqa: F401
+
 
 def df_out_transform_np(coefs: np.ndarray) -> np.ndarray:
     """[B, T, F, O*2] -> [B, O, T, F, 2]. Parameterless reshape+permute,
