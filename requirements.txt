@@ -1,0 +1,10 @@
+# requirements.txt
+# PS26052 Phase 5 — Raspberry Pi 5 Live Pipeline requirements.
+# torch and deepfilternet are assumed to be pre-installed on the Pi.
+
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.22.0
+pyyaml>=6.0
+psutil>=5.9.0
+matplotlib>=3.5.0
