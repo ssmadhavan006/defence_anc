@@ -1,6 +1,7 @@
 import os
 import sys
-import urllib.request
+import time
+import requests
 import tarfile
 import zipfile
 import glob
@@ -9,20 +10,54 @@ import shutil
 LIBRISPEECH_URL = "http://www.openslr.org/resources/12/dev-clean.tar.gz"
 ESC50_URL = "https://github.com/karolpiczak/ESC-50/archive/refs/heads/master.zip"
 
-def download_file(url: str, dest_path: str):
-    if os.path.exists(dest_path):
-        print(f"[SKIP] Archive already exists at {dest_path}")
-        return
-    print(f"[DOWNLOADING] {url} -> {dest_path}...")
+def download_file(url: str, dest_path: str, retries: int = 10):
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    def reporthook(blocknum, blocksize, totalsize):
-        readsofar = blocknum * blocksize
-        if totalsize > 0:
-            percent = readsofar * 100 / totalsize
-            sys.stdout.write(f"\r  Progress: {readsofar / 1e6:.1f} MB / {totalsize / 1e6:.1f} MB ({percent:.1f}%)")
-            sys.stdout.flush()
-    urllib.request.urlretrieve(url, dest_path, reporthook)
-    print("\n  Download complete!")
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    for attempt in range(1, retries + 1):
+        file_size = os.path.getsize(dest_path) if os.path.exists(dest_path) else 0
+        req_headers = headers.copy()
+        if file_size > 0:
+            req_headers["Range"] = f"bytes={file_size}-"
+            print(f"[RESUMING] {url} -> {dest_path} from {file_size / 1e6:.1f} MB (Attempt {attempt}/{retries})...")
+        else:
+            print(f"[DOWNLOADING] {url} -> {dest_path} (Attempt {attempt}/{retries})...")
+
+        try:
+            r = requests.get(url, headers=req_headers, stream=True, timeout=20)
+            if r.status_code == 416:
+                print(f"[SKIP] Archive already fully downloaded at {dest_path}")
+                return
+            r.raise_for_status()
+
+            if r.status_code == 206:
+                content_range = r.headers.get("content-range", "")
+                total_size = int(content_range.split("/")[-1]) if "/" in content_range else 0
+                mode = "ab"
+                downloaded = file_size
+            else:
+                total_size = int(r.headers.get("content-length", 0))
+                mode = "wb"
+                downloaded = 0
+
+            with open(dest_path, mode) as f:
+                for chunk in r.iter_content(chunk_size=512 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            percent = downloaded * 100 / total_size
+                            sys.stdout.write(f"\r  Progress: {downloaded / 1e6:.1f} MB / {total_size / 1e6:.1f} MB ({percent:.1f}%)")
+                            sys.stdout.flush()
+
+            print("\n  Download complete!")
+            return
+        except Exception as e:
+            print(f"\n  Download connection error (attempt {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(3)
+
+    raise RuntimeError(f"Failed to download {url} after {retries} attempts.")
 
 def setup_librispeech(archive_path: str, target_dir: str, max_files: int = 150):
     print("\n=== Extracting LibriSpeech dev-clean ===")
