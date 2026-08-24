@@ -85,3 +85,15 @@ pipeline:
   # of priming). Re-validate with `python live/main.py stress` (0 dropouts
   # required) after changing this or chunk_duration_sec.
   priming_chunks: 1
+
+  # P1-1: optional residual noise-suppression stage after DeepFilterNet3.
+  # Runs a reference-free Adaptive Line Enhancer (live/residual_filter.py) --
+  # NOT the oracle-reference NLMS used in baselines/nlms/nlms.py, which needs
+  # a second true noise channel that a single-mic live deployment doesn't
+  # have (that needs P1-2 dual-mic capture). Read live/residual_filter.py's
+  # module docstring before enabling for a demo: it has a real, honest
+  # limitation (can attenuate broadband speech consonants along with
+  # broadband residual noise) and has NOT yet been validated with a
+  # PESQ/STOI A/B comparison against the eval set. Default false until that
+  # validation exists.
+  residual_filter: false

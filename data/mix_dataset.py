@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, ".")
 
 from models.deepfilternet.df_compat import resample
+from data.augment import ROOM_PRESETS, CLIP_PRESETS, generate_synthetic_rir, apply_reverb, apply_clipping
 
 TARGET_SR = 48000
 SNR_LEVELS = [-5.0, 0.0, 5.0, 10.0, 15.0]
@@ -20,6 +21,23 @@ CATEGORIES = {
     "stationary": ["engine", "vehicle"],
     "non_stationary": ["helicopter", "crowd"],
     "impulsive": ["gunshot", "explosion", "artillery"]
+}
+
+# Per-category defaults for --augment-rir / --augment-clipping (P1-4). Chosen
+# for defence-scenario relevance: stationary engine/vehicle noise sits inside
+# an enclosed cabin; impulsive gunshot/artillery/explosion is modeled as
+# reaching the mic from a bunker/enclosed-position perspective and clips
+# aggressively (the whole point of the augmentation — see data/augment.py
+# module docstring); non-stationary (helicopter/crowd) is modeled as open field.
+CATEGORY_ROOM = {
+    "stationary": "vehicle_cabin",
+    "non_stationary": "open_field",
+    "impulsive": "bunker",
+}
+CATEGORY_CLIP = {
+    "stationary": "mild",
+    "non_stationary": "mild",
+    "impulsive": "aggressive",
 }
 
 def load_and_resample(filepath: str, target_sr: int = TARGET_SR) -> Tuple[np.ndarray, int]:
@@ -93,9 +111,22 @@ def mix_signals(clean: np.ndarray, noise: np.ndarray, target_snr_db: float) -> T
     scaled_clean = clean * norm_factor
     return mixed, scaled_clean, float(achieved_snr_db), float(norm_factor)
 
-def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/noise", output_dir: str = "data/mixtures", manifest_path: str = "data/manifest.csv", total_target_mixtures: int = 300, seed: int = 42, allow_partial_corpus: bool = False):
+def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/noise", output_dir: str = "data/mixtures", manifest_path: str = "data/manifest.csv", total_target_mixtures: int = 300, seed: int = 42, allow_partial_corpus: bool = False, augment_rir: bool = False, augment_clipping: bool = False):
     """
     Generates synthetic dataset and updates manifest.csv.
+
+    augment_rir : bool
+        If True, convolve the noise signal with a synthetic room impulse
+        response (P1-4) before mixing — see data/augment.py for why this is
+        synthetic rather than a downloaded corpus. Room type is chosen per
+        category via CATEGORY_ROOM. Does not affect the clean reference
+        (the reverberant tail is on the noise a mic would pick up from the
+        room; the target speech reference stays dry/near-field).
+    augment_clipping : bool
+        If True, hard-clip the final mixed signal (P1-4) to simulate
+        microphone/ADC overload on a loud transient. Intensity is chosen per
+        category via CATEGORY_CLIP (impulsive clips hardest — the realistic
+        case per the P1-4 rationale). The clean reference is never clipped.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -176,10 +207,25 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
             
             if clean_orig_sr != TARGET_SR or noise_orig_sr != TARGET_SR:
                 resampling_log_count += 1
-                
+
+            rir_rt60_sec = 0.0
+            if augment_rir:
+                room = CATEGORY_ROOM[cat]
+                rt60_lo, rt60_hi = ROOM_PRESETS[room]
+                rir_rt60_sec = round(float(np.random.uniform(rt60_lo, rt60_hi)), 4)
+                rir = generate_synthetic_rir(rir_rt60_sec, sr=TARGET_SR, seed=combo_seed)
+                noise_audio = apply_reverb(noise_audio, rir)
+
             mixed, scaled_clean, achieved_snr, norm_factor = mix_signals(clean_audio, noise_audio, snr_db)
             snr_dev = abs(achieved_snr - snr_db)
             achieved_snr_deviations.append(snr_dev)
+
+            clip_frac = 1.0
+            if augment_clipping:
+                clip_preset = CATEGORY_CLIP[cat]
+                clip_lo, clip_hi = CLIP_PRESETS[clip_preset]
+                clip_frac = round(float(np.random.uniform(clip_lo, clip_hi)), 4)
+                mixed = apply_clipping(mixed, clip_frac)
 
             clean_id = os.path.basename(clean_path)
             noise_id = os.path.basename(noise_path)
@@ -205,12 +251,14 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
                 "achieved_snr_db": round(achieved_snr, 3),
                 "snr_dev_db": round(snr_dev, 4),
                 "norm_factor": round(norm_factor, 6),
+                "rir_rt60_sec": rir_rt60_sec,
+                "clip_frac": clip_frac,
             })
             
             mixture_idx += 1
             
     # Write manifest.csv
-    fieldnames = ["clean_id", "noise_id", "category", "snr_db", "seed", "output_path", "clean_ref_path", "subtype", "duration_sec", "achieved_snr_db", "snr_dev_db", "norm_factor"]
+    fieldnames = ["clean_id", "noise_id", "category", "snr_db", "seed", "output_path", "clean_ref_path", "subtype", "duration_sec", "achieved_snr_db", "snr_dev_db", "norm_factor", "rir_rt60_sec", "clip_frac"]
     with open(manifest_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -231,6 +279,10 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
     print(f"Audio Sample Rate: {TARGET_SR} Hz (All verified)")
     print(f"Resampling Operations Performed: {resampling_log_count}")
     print(f"Achieved SNR Mean Deviation: {mean_dev:.4f} dB | Max Deviation: {max_dev:.4f} dB")
+    if augment_rir:
+        print(f"Augmentation — Reverb: applied (per-category room presets, see CATEGORY_ROOM)")
+    if augment_clipping:
+        print(f"Augmentation — Clipping: applied (per-category intensity, see CATEGORY_CLIP)")
     print(f"Manifest saved to: {manifest_path}")
     
     return manifest_rows
@@ -245,8 +297,21 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Master random seed")
     parser.add_argument("--allow-partial-corpus", action="store_true",
                          help="Proceed even if some noise subtypes have no files (default: refuse and error)")
+    parser.add_argument("--augment-rir", action="store_true",
+                         help="Convolve noise with a synthetic per-category room impulse response before mixing (P1-4)")
+    parser.add_argument("--augment-clipping", action="store_true",
+                         help="Hard-clip the final mix to simulate mic/ADC overload, per-category intensity (P1-4)")
 
     args = parser.parse_args()
+    if (args.augment_rir or args.augment_clipping) and args.output_dir == "data/mixtures":
+        print(
+            "[WARNING] --augment-rir/--augment-clipping is set but --output-dir is still the "
+            "default 'data/mixtures' -- this will OVERWRITE the reproducible clean-condition "
+            "baseline dataset. Pass a distinct --output-dir/--manifest (e.g. "
+            "data/mixtures_augmented / data/manifest_augmented.csv) to generate a parallel "
+            "augmented set instead, per summary/02_NEXT_STEPS_PLAN.md P1-4.",
+            file=sys.stderr,
+        )
     generate_dataset(
         clean_dir=args.clean_dir,
         noise_base_dir=args.noise_dir,
@@ -254,5 +319,7 @@ if __name__ == "__main__":
         manifest_path=args.manifest,
         total_target_mixtures=args.count,
         seed=args.seed,
-        allow_partial_corpus=args.allow_partial_corpus
+        allow_partial_corpus=args.allow_partial_corpus,
+        augment_rir=args.augment_rir,
+        augment_clipping=args.augment_clipping,
     )

@@ -29,6 +29,8 @@ TESTS = [
     ("run_inference",     [sys.executable, "models/deepfilternet/run_inference.py", "--self-test"], True),
     ("spectrogram_demo",  [sys.executable, "demo/spectrogram.py", "--self-test"], False),
     ("e2e_latency_logic", [sys.executable, "live/e2e_latency_test.py", "--self-test"], False),
+    ("augment",           [sys.executable, "data/augment.py", "--self-test"], False),
+    ("residual_filter",   [sys.executable, "live/residual_filter.py", "--self-test"], False),
 ]
 
 

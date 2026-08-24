@@ -60,6 +60,7 @@ import sounddevice as sd
 
 from live.ring_buffer import RingBuffer
 from live.inference_engine import InferenceEngine
+from live.residual_filter import ResidualALEFilter
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ def _load_config(config_path: str) -> dict:
             "latency_warn_sec": 0.30,
             "warmup_passes": 3,
             "priming_chunks": 1,
+            "residual_filter": False,
         },
     }
     if not os.path.exists(config_path):
@@ -236,6 +238,7 @@ class LivePipeline:
         self._output_gain = float(model_cfg.get("output_gain", 1.0))
         self._warmup_passes = int(pipe_cfg.get("warmup_passes", 3))
         self._priming_chunks = int(pipe_cfg.get("priming_chunks", 1))
+        self._residual_filter_enabled = bool(pipe_cfg.get("residual_filter", False))
         self._log_timing = bool(pipe_cfg.get("log_timing", False))
         self._latency_warn_sec = float(pipe_cfg.get("latency_warn_sec", 0.30))
         self._mode = (mode_override or pipe_cfg.get("mode", "enhance")).strip().lower()
@@ -251,6 +254,12 @@ class LivePipeline:
         self._stream_in = None
         self._stream_out = None
         self._engine = None
+        # Instantiated in start() only when residual_filter is enabled (skips
+        # the JIT warmup entirely when unused). See live/residual_filter.py
+        # for why this runs in reference-free ALE mode, not the oracle-NLMS
+        # baseline, and its honest limitations before treating it as a
+        # validated quality improvement.
+        self._residual_filter = None
 
         # Timing stats.
         self._chunk_latencies = []   # seconds, enhance/bypass call only
@@ -371,6 +380,12 @@ class LivePipeline:
                 out_mono = out_mono[:self._chunk_samples]
             else:
                 out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
+
+            # P1-1 residual stage: runs on DeepFilterNet's output, not bypass
+            # pass-through (there's no model residual to clean up there).
+            if self._mode == "enhance" and self._residual_filter is not None:
+                out_mono = self._residual_filter.process_chunk(out_mono)
+
             self.last_out_chunk = out_mono
             self._out_buf.write(out_mono[:, np.newaxis])
 
@@ -389,6 +404,10 @@ class LivePipeline:
             warmup_passes=self._warmup_passes,
             log_timing=self._log_timing,
         )
+
+        if self._residual_filter_enabled:
+            print("[pipeline] Residual filter (P1-1, reference-free ALE) ENABLED.", file=sys.stderr)
+            self._residual_filter = ResidualALEFilter()
 
         self._running.set()
         self._inference_thread = threading.Thread(
