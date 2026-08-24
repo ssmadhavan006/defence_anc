@@ -291,17 +291,22 @@ class LivePipeline:
         """Pull enhanced audio from output ring buffer and send to speakers."""
         if status:
             print(f"[pipeline] Output status: {status}", file=sys.stderr)
-        # timeout=0 is deliberate: this runs on sounddevice's real-time audio
-        # thread, which must return in microseconds, not block for a chunk
-        # period. Blocking here (previously timeout=chunk_sec*2) stalls the
-        # whole audio I/O thread on every underflow, which manifests as an
-        # ALSA xrun on BOTH streams -- confirmed on Pi 2026-08-24: at 50ms
-        # chunks this produced a steady ~3 dropouts/sec for the full 60s run
-        # (171 total, unaffected by priming_chunks 1 vs 3), with "input
-        # overflow" firing in lockstep with "output underflow" even though
-        # _in_buf.write() never blocks and its own overflow_count stayed 0 --
-        # only explainable by the callback thread itself being stalled.
-        chunk = self._out_buf.read(frames, timeout=0.0)
+        # REVERTED 2026-08-24: tried timeout=0.0 here on the theory that this
+        # blocking wait_for() stalls the real-time audio thread and causes
+        # the driver-level "input overflow" xruns seen at 50ms chunks.
+        # Falsified on Pi: with the wait removed, ALSA "output underflow"
+        # events dropped to zero (the driver itself was never actually
+        # starved) but our own dropped-chunk count nearly QUADRUPLED
+        # (170ish -> 722/60s) because the ring buffer gave up on ordinary
+        # inference-thread scheduling jitter instead of waiting the ~1-24ms
+        # it needed. Meanwhile "input overflow" fired at an unchanged rate
+        # with or without this wait -- proving it's an independent,
+        # unrelated issue (most likely snd-aloop period-size negotiation at
+        # 50ms specifically; 100ms and 20ms don't exhibit it). The blocking
+        # wait is retained: it functions as a legitimate short grace period
+        # for the inference thread, not a real-time violation in practice
+        # (RTF stays well under 1 in all tested configs).
+        chunk = self._out_buf.read(frames, timeout=self._chunk_sec * 2)
         if chunk is None:
             # Buffer underrun — output silence to avoid glitches.
             outdata[:] = 0.0
