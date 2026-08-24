@@ -60,7 +60,14 @@ import sounddevice as sd
 
 from live.ring_buffer import RingBuffer
 from live.inference_engine import InferenceEngine
-from live.residual_filter import ResidualALEFilter
+# NOTE: live.residual_filter is imported LAZILY, inside start(), only when
+# pipeline.residual_filter is actually enabled. It depends on numba, which is
+# an OPTIONAL dependency (see requirements-optional.txt). Importing it at
+# module scope made a default-OFF feature break the entire live pipeline on
+# any machine without numba -- confirmed on the Pi 2026-08-24, where
+# `python live/main.py stress` died with ModuleNotFoundError: No module named
+# 'numba' despite residual_filter being set to false. A disabled feature must
+# never be able to take down the core audio path.
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +419,21 @@ class LivePipeline:
         )
 
         if self._residual_filter_enabled:
+            # Lazy import -- see the note at the top of this module. numba is
+            # optional; if it's missing, fail HERE with an actionable message
+            # rather than at import time (which would break the pipeline even
+            # with this feature turned off).
+            try:
+                from live.residual_filter import ResidualALEFilter
+            except ImportError as exc:
+                raise RuntimeError(
+                    "pipeline.residual_filter is enabled but its optional dependency "
+                    f"is missing ({exc}). Install it with:\n"
+                    "    pip install -r requirements-optional.txt\n"
+                    "or set pipeline.residual_filter: false in config/audio_config.yaml "
+                    "to run without the residual stage (it is off by default and not "
+                    "yet quality-validated -- see live/residual_filter.py)."
+                ) from exc
             print("[pipeline] Residual filter (P1-1, reference-free ALE) ENABLED.", file=sys.stderr)
             self._residual_filter = ResidualALEFilter()
 

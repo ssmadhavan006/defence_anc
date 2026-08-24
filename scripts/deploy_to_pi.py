@@ -28,7 +28,8 @@ def bundle_deployment():
     print(f"Creating clean deployment bundle: {zip_path}")
     
     # Files/folders to include
-    includes = ["live", "config", "demo", "models/deepfilternet", "requirements.txt", "README.md"]
+    includes = ["live", "config", "demo", "models/deepfilternet", "requirements.txt",
+                "requirements-optional.txt", "README.md"]
     
     # Files/patterns to exclude
     excludes = ["__pycache__", ".pyc", ".git", ".venv", "eval_raw.csv", "results.csv"]

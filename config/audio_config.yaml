@@ -99,21 +99,24 @@ pipeline:
   residual_filter: false
 
   # P1-3: inference backend. "pytorch" (default) or "onnx".
-  # The ONNX backend is verified bit-exact against PyTorch (corr=1.000000,
-  # max diff=0.000000, 2026-08-24) and measured ~42% faster on the dev
-  # machine (x86_64) -- but that is NOT a Pi measurement (Rule 29: no
-  # benchmark taken off-Pi gets reported as edge performance). Before
-  # switching this to "onnx" for a demo:
-  #   1. Run `python models/deepfilternet/export_onnx.py --export-dir
-  #      results/onnx` ON THE PI (needs onnx + onnxruntime, see
-  #      requirements.txt -- both dev-machine-only otherwise).
-  #   2. Run `python models/deepfilternet/onnx_infer.py --self-test` ON THE
-  #      PI to confirm bit-exact correctness there too.
-  #   3. Re-run the RTF/latency benchmarks and compare against the PyTorch
-  #      backend's numbers before trusting a speed claim.
+  #
+  # ⚠️ THE ONNX BACKEND CANNOT RUN ON THE PI'S CURRENT PYTHON 3.13.
+  # Verified against PyPI metadata 2026-08-24: `onnx` requires `ml_dtypes`,
+  # and every published ml_dtypes release declares numpy>=2.1.0 on Python
+  # 3.13, while deepfilternet requires numpy<2.0. Mutually exclusive -- a
+  # hard upstream constraint, not a pinning problem. `pip install -r
+  # requirements-optional.txt` will fail on the Pi for this reason. Leave
+  # this as "pytorch" there.
+  #
+  # The backend itself is correct and works on Python 3.11/3.12: verified
+  # bit-exact against PyTorch (corr=1.000000, max diff=0.000000) and ~42%
+  # faster on the dev machine (x86_64) -- but that is NOT a Pi measurement
+  # (Rule 29), and it has never been benchmarked on ARM, so no speed claim
+  # for the Pi can be made from it.
+  #
   # INT8 quantization also exists (export_onnx.py --quantize) but is NOT
   # wired up here -- it measured SLOWER than FP32 ONNX on the dev machine
   # and has not been through the mandatory PESQ/STOI re-evaluation. See
-  # progress.md's 2026-08-24 P1-3 entry for the full investigation.
+  # progress.md's 2026-08-24 P1-3 entries for the full investigation.
   inference_backend: pytorch
   onnx_dir: results/onnx

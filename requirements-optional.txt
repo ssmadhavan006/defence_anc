@@ -1,0 +1,58 @@
+# requirements-optional.txt
+# PS26052 — OPTIONAL extras, deliberately kept OUT of requirements.txt.
+#
+# Nothing here is needed to run the live audio pipeline or the demo. This
+# file exists so that a dependency-resolution failure in an optional feature
+# can never block the demo path (which is exactly what happened on the Pi
+# 2026-08-24: adding scipy to requirements.txt made the whole file
+# uninstallable with ResolutionImpossible, taking the core pipeline install
+# down with it).
+#
+# Install only if you need the specific feature noted:
+#   pip install -r requirements-optional.txt
+
+# --- P1-1 residual filter (live/residual_filter.py) ---
+# Only needed if you set pipeline.residual_filter: true in
+# config/audio_config.yaml. That feature is OFF by default and has not yet
+# been quality-validated (no PESQ/STOI A/B run) -- see the module docstring.
+# The pipeline imports it lazily, so its absence does not affect the default
+# configuration at all.
+# numba 0.67.0 verified: has a cp313/aarch64 wheel AND allows numpy<2.6,
+# so it coexists with the numpy==1.26.4 pin deepfilternet requires.
+numba==0.67.0
+
+# --- P1-4 dataset augmentation (data/augment.py) ---
+# NOT required: data/augment.py implements its own numpy FFT convolution and
+# has no scipy dependency (verified numerically identical to
+# scipy.signal.fftconvolve in its self-test). scipy is listed here ONLY
+# because augment.py's self-test will cross-check against it when present.
+#
+# Pin rationale: scipy>=1.18 requires numpy>=2.0.0, which is INCOMPATIBLE
+# with deepfilternet's numpy<2.0. scipy 1.17.0 (numpy<2.7,>=1.26.4) is the
+# newest release that still works with the numpy==1.26.4 pin and has a
+# cp313/aarch64 wheel. Do not loosen this without re-checking that.
+scipy==1.17.0
+
+# --- P1-3 ONNX Runtime backend (models/deepfilternet/export_onnx.py) ---
+# ⚠️ KNOWN INCOMPATIBLE ON PYTHON 3.13 (the Pi's version). Do not expect
+# these to install alongside deepfilternet there.
+#
+# Verified against PyPI metadata 2026-08-24: `onnx` requires `ml_dtypes`,
+# and EVERY published ml_dtypes release (0.5.0 through 0.6.0) declares
+# `numpy>=2.1.0; python_version >= "3.13"`. deepfilternet requires
+# numpy<2.0. On Python 3.13 those are mutually exclusive -- there is no
+# version combination that satisfies both, so the ONNX backend cannot run
+# on the Pi's current environment. This is a hard upstream constraint, not
+# a pinning problem.
+#
+# The ONNX backend remains fully functional on Python 3.11/3.12 environments
+# (verified working and bit-exact on the dev machine, Python 3.11), and
+# pipeline.inference_backend defaults to "pytorch", so this affects nothing
+# in the default configuration. Revisit if deepfilternet gains numpy 2.x
+# support, or run the Pi on Python 3.12.
+onnx>=1.22.0
+onnxruntime>=1.29.0
+# Needed even though export_onnx.py never uses torch's dynamo exporter: on
+# newer torch releases (confirmed: the Pi's), torch.onnx.export() imports
+# dynamo exporter machinery internally regardless of which path runs.
+onnxscript>=0.7.1

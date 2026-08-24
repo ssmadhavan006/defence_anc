@@ -19,7 +19,26 @@ Self-test (no audio hardware, no dataset required):
 """
 
 import numpy as np
-from scipy.signal import fftconvolve
+
+
+def _fftconvolve(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """
+    Full linear convolution of two 1-D signals via FFT. Equivalent to
+    scipy.signal.fftconvolve(a, b, mode="full").
+
+    Implemented directly on numpy rather than importing scipy: scipy is a
+    heavy dependency this module was the ONLY consumer of, and on the Pi's
+    Python 3.13 the scipy versions with prebuilt aarch64 wheels require
+    numpy>=2.0, which directly conflicts with deepfilternet's numpy<2.0
+    requirement (confirmed 2026-08-24 -- `pip install -r requirements.txt`
+    failed with ResolutionImpossible on the Pi because of exactly this).
+    Verified numerically identical to scipy's implementation in _self_test
+    below, on any machine where scipy happens to be available.
+    """
+    n = len(a) + len(b) - 1
+    n_fft = 1 << (n - 1).bit_length()  # next power of two, for FFT efficiency
+    spec = np.fft.rfft(a, n_fft) * np.fft.rfft(b, n_fft)
+    return np.fft.irfft(spec, n_fft)[:n]
 
 # Room-type presets: (rt60_low_sec, rt60_high_sec) reverberation-time range.
 # RT60 = time for the reverb tail to decay 60 dB. Chosen to be
@@ -86,7 +105,7 @@ def apply_reverb(signal: np.ndarray, rir: np.ndarray) -> np.ndarray:
     if len(signal) == 0:
         return signal
     orig_peak = np.max(np.abs(signal))
-    wet = fftconvolve(signal, rir, mode="full")[: len(signal)]
+    wet = _fftconvolve(signal, rir)[: len(signal)]
     wet_peak = np.max(np.abs(wet))
     if wet_peak > 1e-10 and orig_peak > 1e-10:
         wet = wet * (orig_peak / wet_peak)
@@ -167,6 +186,23 @@ def _self_test():
     clipped_silence = apply_clipping(silence, clip_frac=0.5)
     assert np.all(clipped_silence == 0.0)
     print("  [PASS] test 7: apply_clipping handles silence without divide-by-zero")
+
+    # --- Test 8b: _fftconvolve matches scipy exactly (when scipy is present) ---
+    # The scipy dependency was removed (see _fftconvolve's docstring for why);
+    # this proves the replacement is numerically equivalent rather than
+    # assuming it. Skips cleanly on machines without scipy (e.g. the Pi).
+    try:
+        from scipy.signal import fftconvolve as _scipy_fftconvolve
+    except ImportError:
+        print("  [SKIP] test 8b: scipy not installed, cannot cross-check _fftconvolve")
+    else:
+        for na, nb in ((1000, 137), (4800, 2400), (777, 1)):
+            a = rng.standard_normal(na).astype(np.float32)
+            b = rng.standard_normal(nb).astype(np.float32)
+            np.testing.assert_allclose(
+                _fftconvolve(a, b), _scipy_fftconvolve(a, b, mode="full"), atol=1e-4
+            )
+        print("  [PASS] test 8b: _fftconvolve matches scipy.signal.fftconvolve on 3 shape pairs")
 
     # --- Test 8: invalid inputs raise, don't silently misbehave ---
     try:

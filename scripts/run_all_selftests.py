@@ -23,17 +23,33 @@ import subprocess
 import sys
 import time
 
+# (name, command, needs_model, optional_dep)
+# optional_dep: if set, this test covers a feature whose dependency lives in
+# requirements-optional.txt. When that module isn't importable, the test is
+# reported as SKIP rather than FAIL -- the feature is genuinely optional and
+# off by default, so its absence is not a broken build. Notably the ONNX
+# backend CANNOT be installed on Python 3.13 at all (upstream ml_dtypes
+# requires numpy>=2.1 there, deepfilternet requires numpy<2.0) -- see
+# requirements-optional.txt for the full explanation.
 TESTS = [
-    ("ring_buffer",       [sys.executable, "live/ring_buffer.py"], False),
-    ("inference_engine",  [sys.executable, "live/inference_engine.py"], True),
-    ("run_inference",     [sys.executable, "models/deepfilternet/run_inference.py", "--self-test"], True),
-    ("spectrogram_demo",  [sys.executable, "demo/spectrogram.py", "--self-test"], False),
-    ("e2e_latency_logic", [sys.executable, "live/e2e_latency_test.py", "--self-test"], False),
-    ("augment",           [sys.executable, "data/augment.py", "--self-test"], False),
-    ("residual_filter",   [sys.executable, "live/residual_filter.py", "--self-test"], False),
-    ("export_onnx",       [sys.executable, "models/deepfilternet/export_onnx.py", "--self-test"], True),
-    ("onnx_infer",        [sys.executable, "models/deepfilternet/onnx_infer.py", "--self-test"], True),
+    ("ring_buffer",       [sys.executable, "live/ring_buffer.py"], False, None),
+    ("inference_engine",  [sys.executable, "live/inference_engine.py"], True, None),
+    ("run_inference",     [sys.executable, "models/deepfilternet/run_inference.py", "--self-test"], True, None),
+    ("spectrogram_demo",  [sys.executable, "demo/spectrogram.py", "--self-test"], False, None),
+    ("e2e_latency_logic", [sys.executable, "live/e2e_latency_test.py", "--self-test"], False, None),
+    ("augment",           [sys.executable, "data/augment.py", "--self-test"], False, None),
+    ("residual_filter",   [sys.executable, "live/residual_filter.py", "--self-test"], False, "numba"),
+    ("export_onnx",       [sys.executable, "models/deepfilternet/export_onnx.py", "--self-test"], True, "onnxscript"),
+    ("onnx_infer",        [sys.executable, "models/deepfilternet/onnx_infer.py", "--self-test"], True, "onnxscript"),
 ]
+
+
+def _module_available(mod_name: str) -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec(mod_name) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def main():
@@ -43,9 +59,15 @@ def main():
     args = parser.parse_args()
 
     results = []
-    for name, cmd, needs_model in TESTS:
+    for name, cmd, needs_model, optional_dep in TESTS:
         if args.skip_dfn and needs_model:
             print(f"[SKIP] {name} (--skip-dfn)")
+            results.append((name, "SKIP", 0.0))
+            continue
+
+        if optional_dep and not _module_available(optional_dep):
+            print(f"[SKIP] {name} (optional dependency {optional_dep!r} not installed "
+                  f"-- see requirements-optional.txt)")
             results.append((name, "SKIP", 0.0))
             continue
 
