@@ -291,7 +291,17 @@ class LivePipeline:
         """Pull enhanced audio from output ring buffer and send to speakers."""
         if status:
             print(f"[pipeline] Output status: {status}", file=sys.stderr)
-        chunk = self._out_buf.read(frames, timeout=self._chunk_sec * 2)
+        # timeout=0 is deliberate: this runs on sounddevice's real-time audio
+        # thread, which must return in microseconds, not block for a chunk
+        # period. Blocking here (previously timeout=chunk_sec*2) stalls the
+        # whole audio I/O thread on every underflow, which manifests as an
+        # ALSA xrun on BOTH streams -- confirmed on Pi 2026-08-24: at 50ms
+        # chunks this produced a steady ~3 dropouts/sec for the full 60s run
+        # (171 total, unaffected by priming_chunks 1 vs 3), with "input
+        # overflow" firing in lockstep with "output underflow" even though
+        # _in_buf.write() never blocks and its own overflow_count stayed 0 --
+        # only explainable by the callback thread itself being stalled.
+        chunk = self._out_buf.read(frames, timeout=0.0)
         if chunk is None:
             # Buffer underrun — output silence to avoid glitches.
             outdata[:] = 0.0
