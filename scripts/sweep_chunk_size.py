@@ -127,13 +127,23 @@ def main():
         rows.append(row)
         print(json.dumps(row, indent=2))
 
+    def _fmt(v):
+        # dict.get(key, default) only applies default when the KEY is
+        # missing -- rows store explicit None on failure, which .get()
+        # happily returns as-is and then crashes str.format on NoneType.
+        return "" if v is None else v
+
     print(f"\n{'='*70}\nSWEEP SUMMARY\n{'='*70}")
     header = f"{'Chunk(ms)':<10} {'P95 RTF':<10} {'Dropouts':<10} {'DeviceRT(ms)':<14} {'FullEst(ms)':<12}"
     print(header)
     print("-" * len(header))
     for r in rows:
-        print(f"{r.get('chunk_ms',''):<10} {r.get('p95_rtf',''):<10} {r.get('dropouts',''):<10} "
-              f"{r.get('device_roundtrip_ms',''):<14} {r.get('full_estimate_ms',''):<12}")
+        print(f"{_fmt(r.get('chunk_ms')):<10} {_fmt(r.get('p95_rtf')):<10} {_fmt(r.get('dropouts')):<10} "
+              f"{_fmt(r.get('device_roundtrip_ms')):<14} {_fmt(r.get('full_estimate_ms')):<12}")
+        if r.get("error"):
+            print(f"  [error] {r['error']}")
+        if r.get("e2e_error"):
+            print(f"  [e2e_error] {r['e2e_error'].strip().splitlines()[-1]}")
 
     print("\nSelection rule: smallest chunk with p95 RTF <= 0.6 AND dropouts == 0.")
     print("Confirm the chosen chunk size with a full 10-minute stress test before the demo:")

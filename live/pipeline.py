@@ -129,24 +129,16 @@ def _load_config(config_path: str) -> dict:
 # Device resolver — prevents PortAudioError(-1) on Linux when device is None
 # ---------------------------------------------------------------------------
 
-def _resolve_device(dev_spec, kind="input"):
+def _auto_detect_device(kind="input"):
     """
-    Resolve an audio device specifier for sounddevice.
-
-    If dev_spec is an explicit int or str, return it as-is.
-    If dev_spec is None, attempt to find a valid default via:
+    Find a plausible device via, in order:
       1. sd.default.device (PortAudio default, only if >= 0)
       2. First loopback/USB device found in query_devices()
       3. First any-channel device in query_devices()
       4. Known snd-aloop ALSA hw: strings (hw:2,0 for input / hw:2,1 for output)
-      5. Integer 0 as absolute last resort (never the string "default" which
-         is not a valid ALSA device on many Pi configurations)
-    This prevents PortAudioError(-1) and ValueError('No ... matching default')
-    on Linux/ALSA when no PortAudio default is configured.
+    Never returns the string "default", which is not a valid ALSA device on
+    many Pi configurations.
     """
-    if dev_spec is not None:
-        return dev_spec
-
     idx_pos = 0 if kind == "input" else 1
     try:
         def_dev = sd.default.device[idx_pos]
@@ -177,10 +169,37 @@ def _resolve_device(dev_spec, kind="input"):
     # query_devices() returned nothing (snd-aloop may not be loaded yet).
     # Try the known snd-aloop Loopback hw: strings directly — card 2
     # subdevice 0 handles input, subdevice 1 handles output on most Pi configs.
-    if kind == "input":
-        return "hw:2,0"
-    else:
-        return "hw:2,1"
+    return "hw:2,0" if kind == "input" else "hw:2,1"
+
+
+def _resolve_device(dev_spec, kind="input"):
+    """
+    Resolve an audio device specifier for sounddevice.
+
+    If dev_spec is an explicit int or str, VALIDATE it (query_devices) before
+    trusting it -- a hardcoded config index goes stale the moment device
+    enumeration order changes (reboot, USB re-plug, snd-aloop not yet loaded
+    this boot). Falls through to _auto_detect_device() with a clear stderr
+    warning rather than letting a raw PortAudioError crash the whole
+    pipeline/stress-test/latency-test run on an otherwise-healthy machine.
+
+    If dev_spec is None, resolves directly via _auto_detect_device().
+    """
+    if dev_spec is not None:
+        try:
+            sd.query_devices(dev_spec)
+            return dev_spec
+        except Exception as exc:
+            print(
+                f"[pipeline] WARNING: configured {kind}_device={dev_spec!r} is not valid "
+                f"on this machine right now ({exc}). Falling back to auto-detection -- "
+                f"run `python live/main.py detect` and update config/audio_config.yaml "
+                f"with the current device index so this doesn't happen again.",
+                file=sys.stderr,
+            )
+            return _auto_detect_device(kind)
+
+    return _auto_detect_device(kind)
 
 
 # ---------------------------------------------------------------------------
