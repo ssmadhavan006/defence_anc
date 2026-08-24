@@ -63,18 +63,26 @@ class InferenceEngine:
         atten_lim_db: float = 100.0,
         warmup_passes: int = 3,
         log_timing: bool = False,
+        backend: str = "pytorch",
+        onnx_dir: str = None,
     ):
         if sample_rate != self.NATIVE_SR:
             raise ValueError(
                 f"InferenceEngine requires sample_rate={self.NATIVE_SR} Hz "
                 f"(DeepFilterNet3 native SR). Got {sample_rate}."
             )
+        if backend not in ("pytorch", "onnx"):
+            raise ValueError(f"backend must be 'pytorch' or 'onnx', got {backend!r}")
+        if backend == "onnx" and not onnx_dir:
+            raise ValueError("backend='onnx' requires onnx_dir pointing at exported models "
+                              "(see models/deepfilternet/export_onnx.py)")
 
         self._sample_rate = sample_rate
         self._atten_lim_db = atten_lim_db
         self._log_timing = log_timing
+        self._backend = backend
 
-        print("[InferenceEngine] Loading DeepFilterNet model...", file=sys.stderr)
+        print(f"[InferenceEngine] Loading DeepFilterNet model (backend={backend})...", file=sys.stderr)
         t0 = time.perf_counter()
         self._model, self._df_state, suffix = init_df(
             post_filter=False, log_level="ERROR"
@@ -85,6 +93,26 @@ class InferenceEngine:
             f"(suffix={suffix})",
             file=sys.stderr,
         )
+
+        self._onnx_model = None
+        if backend == "onnx":
+            # P1-3: FP32 ONNX Runtime backend. Verified bit-exact against
+            # PyTorch (corr=1.000000, max diff=0.000000, 2026-08-24) --
+            # mathematically the same computation via a different runtime,
+            # so it carries no quality risk. ONLY valid at the exact chunk
+            # shape it was exported at (see export_onnx.py's "CRITICAL SCOPE
+            # LIMIT" docstring) -- this project always calls enhance_chunk()
+            # with a fixed 100ms chunk, so that's what export_onnx.py traces.
+            # INT8 quantization exists (models/deepfilternet/export_onnx.py
+            # --quantize) but is NOT selectable here: on the dev machine it
+            # measured SLOWER than FP32 ONNX (dynamic quantization's benefit
+            # is ARM-NEON/mobile-specific, unproven on x86) and its quality
+            # has not been through the mandatory PESQ/STOI re-evaluation --
+            # needs real Pi speed data before it's worth pursuing further.
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "models", "deepfilternet"))
+            from onnx_infer import OnnxDfNet
+            self._onnx_model = OnnxDfNet(onnx_dir)
+            print(f"[InferenceEngine] ONNX backend loaded from {onnx_dir}", file=sys.stderr)
 
         # Verify DeepFilterNet's native SR matches what we expect.
         dfn_sr = self._df_state.sr()
@@ -113,13 +141,20 @@ class InferenceEngine:
         )
         t0 = time.perf_counter()
         for _ in range(n_passes):
-            enhance(
-                self._model,
-                self._df_state,
-                dummy_tensor,
-                pad=True,
-                atten_lim_db=self._atten_lim_db,
-            )
+            if self._backend == "onnx":
+                from onnx_infer import enhance_onnx
+                enhance_onnx(
+                    self._onnx_model, self._df_state, dummy_tensor,
+                    pad=True, atten_lim_db=self._atten_lim_db,
+                )
+            else:
+                enhance(
+                    self._model,
+                    self._df_state,
+                    dummy_tensor,
+                    pad=True,
+                    atten_lim_db=self._atten_lim_db,
+                )
         warmup_ms = (time.perf_counter() - t0) * 1000
         print(
             f"[InferenceEngine] Warmup complete ({warmup_ms:.1f} ms total).",
@@ -158,13 +193,23 @@ class InferenceEngine:
         if self._log_timing:
             t0 = time.perf_counter()
 
-        enhanced = enhance(
-            self._model,
-            self._df_state,
-            audio_tensor,
-            pad=True,
-            atten_lim_db=self._atten_lim_db,
-        )
+        if self._backend == "onnx":
+            from onnx_infer import enhance_onnx
+            enhanced = enhance_onnx(
+                self._onnx_model,
+                self._df_state,
+                audio_tensor,
+                pad=True,
+                atten_lim_db=self._atten_lim_db,
+            )
+        else:
+            enhanced = enhance(
+                self._model,
+                self._df_state,
+                audio_tensor,
+                pad=True,
+                atten_lim_db=self._atten_lim_db,
+            )
 
         if self._log_timing:
             elapsed_ms = (time.perf_counter() - t0) * 1000

@@ -31,6 +31,8 @@ TESTS = [
     ("e2e_latency_logic", [sys.executable, "live/e2e_latency_test.py", "--self-test"], False),
     ("augment",           [sys.executable, "data/augment.py", "--self-test"], False),
     ("residual_filter",   [sys.executable, "live/residual_filter.py", "--self-test"], False),
+    ("export_onnx",       [sys.executable, "models/deepfilternet/export_onnx.py", "--self-test"], True),
+    ("onnx_infer",        [sys.executable, "models/deepfilternet/onnx_infer.py", "--self-test"], True),
 ]
 
 

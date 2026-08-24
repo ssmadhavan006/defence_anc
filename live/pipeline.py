@@ -92,6 +92,8 @@ def _load_config(config_path: str) -> dict:
             "warmup_passes": 3,
             "priming_chunks": 1,
             "residual_filter": False,
+            "inference_backend": "pytorch",
+            "onnx_dir": "results/onnx",
         },
     }
     if not os.path.exists(config_path):
@@ -239,6 +241,8 @@ class LivePipeline:
         self._warmup_passes = int(pipe_cfg.get("warmup_passes", 3))
         self._priming_chunks = int(pipe_cfg.get("priming_chunks", 1))
         self._residual_filter_enabled = bool(pipe_cfg.get("residual_filter", False))
+        self._inference_backend = str(pipe_cfg.get("inference_backend", "pytorch"))
+        self._onnx_dir = str(pipe_cfg.get("onnx_dir", "results/onnx"))
         self._log_timing = bool(pipe_cfg.get("log_timing", False))
         self._latency_warn_sec = float(pipe_cfg.get("latency_warn_sec", 0.30))
         self._mode = (mode_override or pipe_cfg.get("mode", "enhance")).strip().lower()
@@ -403,6 +407,8 @@ class LivePipeline:
             atten_lim_db=self._atten_lim_db,
             warmup_passes=self._warmup_passes,
             log_timing=self._log_timing,
+            backend=self._inference_backend,
+            onnx_dir=self._onnx_dir if self._inference_backend == "onnx" else None,
         )
 
         if self._residual_filter_enabled:

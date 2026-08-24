@@ -97,3 +97,23 @@ pipeline:
   # PESQ/STOI A/B comparison against the eval set. Default false until that
   # validation exists.
   residual_filter: false
+
+  # P1-3: inference backend. "pytorch" (default) or "onnx".
+  # The ONNX backend is verified bit-exact against PyTorch (corr=1.000000,
+  # max diff=0.000000, 2026-08-24) and measured ~42% faster on the dev
+  # machine (x86_64) -- but that is NOT a Pi measurement (Rule 29: no
+  # benchmark taken off-Pi gets reported as edge performance). Before
+  # switching this to "onnx" for a demo:
+  #   1. Run `python models/deepfilternet/export_onnx.py --export-dir
+  #      results/onnx` ON THE PI (needs onnx + onnxruntime, see
+  #      requirements.txt -- both dev-machine-only otherwise).
+  #   2. Run `python models/deepfilternet/onnx_infer.py --self-test` ON THE
+  #      PI to confirm bit-exact correctness there too.
+  #   3. Re-run the RTF/latency benchmarks and compare against the PyTorch
+  #      backend's numbers before trusting a speed claim.
+  # INT8 quantization also exists (export_onnx.py --quantize) but is NOT
+  # wired up here -- it measured SLOWER than FP32 ONNX on the dev machine
+  # and has not been through the mandatory PESQ/STOI re-evaluation. See
+  # progress.md's 2026-08-24 P1-3 entry for the full investigation.
+  inference_backend: pytorch
+  onnx_dir: results/onnx

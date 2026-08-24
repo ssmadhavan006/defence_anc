@@ -8,3 +8,10 @@ numpy>=1.22.0
 pyyaml>=6.0
 psutil>=5.9.0
 matplotlib>=3.5.0
+
+# P1-3: optional ONNX Runtime inference backend (live/inference_engine.py
+# backend="onnx"). Only needed if you run models/deepfilternet/export_onnx.py
+# and enable pipeline.inference_backend: onnx in audio_config.yaml — the
+# default PyTorch backend needs neither of these.
+onnx>=1.22.0
+onnxruntime>=1.29.0
