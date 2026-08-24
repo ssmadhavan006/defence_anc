@@ -109,8 +109,9 @@ config/                audio_config.yaml — hardware device IDs, chunk size, pi
 All phases complete (0–5). The offline batch pipeline (dataset, DSP baselines, DeepFilterNet, evaluation) is fully evaluated, and the real-time live pipeline is physically verified on Raspberry Pi 5 hardware:
 
 - **Live streaming**: `sounddevice` capture → ring buffer → DeepFilterNet3 → ring buffer → playback, running on-device (`live/pipeline.py`).
-- **Latency** (Pi 5, physical loopback, 10 reps): bypass 0.00 ms, enhance 29.18 ms median, 0-sample cross-correlation lag.
-- **10-minute stress test** (Pi 5): 600.3 s continuous run, 0 ring-buffer overflows, 0 underruns, max CPU temp 50.1 °C, RTF 0.378 median under live load.
+- **Per-chunk inference** (Pi 5, in-memory, 10 reps): 29.18 ms median (RTF 0.29), 0-sample cross-correlation lookahead.
+- **End-to-end latency** (Pi 5, real `sounddevice`/PortAudio/ALSA device round-trip, 20 reps): 42.67 ms round-trip + inference + 100 ms priming ≈ **172 ms full-pipeline estimate**, chunk size 100 ms. Measured via `snd-aloop` loopback — a physical microphone/headset has not yet been integrated (open item, see `summary/02_NEXT_STEPS_PLAN.md` P0-1).
+- **10-minute stress test** (Pi 5, confirmed 100 ms chunk size): 600.5 s continuous run, 0 dropouts across 6001 chunks, max CPU temp 52.9 °C, RTF median 0.3823 / p95 0.4008.
 - **Demo tooling**: terminal dashboard (`demo/dashboard.py`) and live before/after spectrogram (`demo/spectrogram.py`), both with ENHANCE/BYPASS toggle.
 
 Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: PESQ-WB misses the >2.5 DRDO target on stationary (2.48) and non-stationary (2.13) noise on the full SNR-averaged evaluation — impulsive now passes (2.58) with the corrected gunshot/artillery dataset; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.

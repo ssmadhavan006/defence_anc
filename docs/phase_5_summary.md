@@ -13,9 +13,11 @@ The pipeline wraps the **DeepFilterNet3** deep neural network engine in a decoup
 
 All physical hardware tests (**Mode B**) were executed directly on the Raspberry Pi 5 and passed 100% of validation criteria:
 - **Zero-lag causal enhancement:** Empirical click cross-correlation verified **0.0 samples of lookahead delay** (0.000 ms).
-- **Inference latency:** Median processing time of **29.18 ms** per 100 ms frame on the Pi 5 (Real-Time Factor $\text{RTF} = 0.2918$, or **~3.4x faster than real-time**).
-- **10-minute continuous stress test:** Completed 600.3 seconds (5,997 audio frames) with **0 ring-buffer overflows**, **0 underruns**, a peak CPU load of **19.1%**, and a maximum CPU temperature of **50.1 °C** (well below the 80.0 °C thermal threshold).
+- **Per-chunk inference latency:** Median processing time of **29.18 ms** per 100 ms frame on the Pi 5 (Real-Time Factor $\text{RTF} = 0.2918$, or **~3.4x faster than real-time**). *This is per-chunk model compute time, measured in-memory — see §7 for the true end-to-end figure, added 2026-08-24.*
+- **10-minute continuous stress test:** Completed 600.3 seconds (5,997 audio frames) with **0 ring-buffer overflows**, **0 underruns**, a peak CPU load of **19.1%**, and a maximum CPU temperature of **50.1 °C** (well below the 80.0 °C thermal threshold). *Superseded by a re-run at the confirmed chunk size — see §7.*
 - **Interactive TUI Dashboard:** Real-time terminal monitoring interface with dynamic key toggling between `ENHANCE` and `BYPASS` modes.
+
+> **Correction (2026-08-24):** earlier drafts of this document and other project docs referred to the 29.18 ms figure above as "physical loopback latency." That was a mislabel — `live/latency_test.py` (Mode A) operates on in-memory arrays and never opens a `sounddevice` stream, so it cannot measure end-to-end latency. The real, device-driven measurement is in **§7** below: ~172 ms full-pipeline estimate. This correction follows the gap identified in `summary/02_NEXT_STEPS_PLAN.md` §1.
 
 ---
 
@@ -79,7 +81,7 @@ Per **Rule 30**, algorithmic lookahead lag was empirically measured by feeding a
 | **BYPASS** | 10 | **0.0 samples** | **0.000 ms** | 0.00 ms | 0.01 ms | 0.0000 |
 | **ENHANCE** | 10 | **0.0 samples** | **0.000 ms** | **29.18 ms** | 29.85 ms | **0.2918** |
 
-*Takeaway:* DeepFilterNet3 operating with `pad=True` introduces **zero sample lag** in cross-correlation, allowing exact time alignment between raw (BYPASS) and enhanced audio switching. Processing a 100 ms chunk takes 29.18 ms, providing ~3.4x real-time execution headroom.
+*Takeaway:* DeepFilterNet3 operating with `pad=True` introduces **zero sample lag** in cross-correlation, allowing exact time alignment between raw (BYPASS) and enhanced audio switching. Processing a 100 ms chunk takes 29.18 ms, providing ~3.4x real-time execution headroom. **This table measures per-chunk model compute time only — see §7 for real device-I/O end-to-end latency.**
 
 ### 4.2 10-Minute Continuous Stress Test (`live/stress_test.py`)
 Executed continuous real-time enhancement over 600 seconds to evaluate stability under thermal and computational load.
@@ -124,8 +126,56 @@ An interactive terminal dashboard was deployed to monitor live system performanc
 - [x] BYPASS mode verified over 60s with 0 dropouts.
 - [x] ENHANCE mode verified with 0 dropouts and RTF $< 1.0$ under live load.
 - [x] Dynamic Bypass/Enhance toggle verified click-free via terminal dashboard (`demo/dashboard.py`).
-- [x] Physical loopback latency measured (`results/latency_pi.json`: bypass 0.00 ms, enhance 29.18 ms).
-- [x] 10-minute continuous stress test passed (`results/stress_test_report.json`: 600.3s, 0 dropouts, max 50.1 °C).
+- [x] Per-chunk inference time measured (`results/latency_pi.json`: bypass 0.00 ms, enhance 29.18 ms). **Not end-to-end — see §7.**
+- [x] Real device-I/O end-to-end latency measured (§7, 2026-08-24): 42.67 ms round-trip, ~172 ms full-pipeline estimate.
+- [x] 10-minute continuous stress test passed at the confirmed 100 ms chunk size (§7: 600.5s, 0 dropouts / 6001 chunks, max 52.9 °C).
 - [x] `deploy_to_pi.py` clean packaging script operational (`pi_deploy.zip`).
 - [x] `live/main.py` unified CLI functional across all subcommands.
 - [x] `progress.md` and `architecture.md` updated with verbatim evidence from Raspberry Pi 5.
+- [ ] **Physical microphone/headset integration — still open.** All measurements above, including §7, use `snd-aloop` (virtual ALSA loopback), never physical transducers. See `summary/02_NEXT_STEPS_PLAN.md` P0-1.
+
+---
+
+## 7. Addendum (2026-08-24) — Real End-to-End Latency, Two Bugs Found, Chunk Size Decision
+
+This section supersedes the "physical loopback" label used in §4.1/§6 above. `live/e2e_latency_test.py` drives the actual `sounddevice`/PortAudio/ALSA stack (unlike `live/latency_test.py`, which is in-memory) via a click-loopback cross-correlation test, run on the Pi.
+
+### 7.1 Bug found: device config was silent by construction
+
+`config/audio_config.yaml` originally set `input_device: 0` and `output_device: 0` — the same `snd-aloop` device for both. ALSA's loopback driver does not loop a device back to itself; it cross-pairs the two PCM devices on the card (audio played to `hw:2,0` arrives only on the *capture* side of `hw:2,1`). This configuration was silent by design — confirmed directly, `e2e_latency_test.py` read back exact zeros (`peak=0.00000, noise_floor=0.00000`) before the fix. Corrected to `input_device: 1` / `output_device: 0` (the paired devices).
+
+### 7.2 Bug found: stress-test dropout counter conflated shutdown drain with real failures
+
+`live/pipeline.py`'s output audio callback counted every buffer-empty event as a dropout, including the ones that necessarily occur after `stop()` — the inference thread has already exited but the output stream keeps calling back until closed, so it drains to empty by construction. Every stress run therefore reported ≥1 dropout and FAILed regardless of actual real-time health. Fixed by splitting the counter into real dropouts (gates the verdict) and shutdown-drain underruns (reported separately, excluded from the verdict).
+
+### 7.3 Hypothesis tested and correctly reverted
+
+At 50 ms chunks, ALSA reported sustained `input overflow` errors. Hypothesized this was caused by a blocking wait inside the real-time output audio callback and shipped a non-blocking fix. **Tested on Pi and falsified:** ALSA-level output underflows dropped to zero, but the application's own dropped-chunk count nearly quadrupled (170ish → 722 per 60 s), because removing the wait stopped giving the inference thread its normal few ms of scheduling slack. `input overflow` fired at an unchanged rate with or without the change, proving it was never the cause. The change was reverted. The 50 ms `input overflow` issue is understood to be a `snd-aloop` driver/period-negotiation issue specific to that chunk size (100 ms does not exhibit it) — not pursued further given the demo timeline.
+
+### 7.4 Real end-to-end latency
+
+| Quantity | Value | Method |
+|---|---|---|
+| Device round-trip | 42.67 ms (median = p95 = min = max, 20 reps) | `live/e2e_latency_test.py`, real `sounddevice`/PortAudio/ALSA, `snd-aloop` |
+| Per-chunk inference | ~29–30 ms median | `live/latency_test.py`, in-memory |
+| Output priming | 100 ms (1 chunk) | `pipeline.priming_chunks: 1` |
+| **Full pipeline estimate** | **≈172 ms** | Sum of the above (engineering estimate, not a single unified measurement) |
+
+The device round-trip being *exactly* identical across all 20 reps (not just close) is consistent with a deterministic digital loopback (fixed ALSA period/buffer transfer sizes) rather than measurement noise.
+
+### 7.5 Chunk size decision
+
+`scripts/sweep_chunk_size.py` across 100/50/20/10 ms, with both bugs above fixed:
+
+| Chunk (ms) | P95 RTF | Dropouts (60s, post-fix) | Verdict |
+|---|---|---|---|
+| 100 | 0.29–0.38 | 0 (real) | **Selected** |
+| 50 | 0.42–0.44 | Sustained `input overflow` (driver-level, §7.3) | Rejected |
+| 20 | 0.85 | ~0 | Rejected — fails RTF ≤ 0.6 budget |
+| 10 | 1.6–1.75 | 530+ | Rejected — RTF > 1.0, genuinely CPU-bound |
+
+**100 ms confirmed** with a full 10-minute `python live/main.py stress --duration 600`: **PASS**, 0 dropouts across 6001 chunks, RTF median 0.3823 / p95 0.4008, max temp 52.9 °C.
+
+### 7.6 Gap against the P0-3 target
+
+`summary/02_NEXT_STEPS_PLAN.md` §4 (P0-3) set an acceptance criterion of end-to-end latency **< 150 ms, ideally < 100 ms**. The confirmed figure here is **~172 ms** — close, but the target is not met. The 50 ms chunk (which would have reached ~114 ms) is blocked by the driver-level issue in §7.3. Closing this gap further needs either physical hardware (which may not exhibit the same `snd-aloop`-specific issue) or P1-3 (ONNX/quantization, to shrink inference time and widen the RTF margin enough to make a smaller chunk viable). Reported honestly rather than rounded up to "target met."

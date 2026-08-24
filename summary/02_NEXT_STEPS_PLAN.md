@@ -125,11 +125,7 @@ aplay /tmp/mic_test.wav
 
 ### P0-2 · Build a true end-to-end latency test ⏱️ 2–3 h
 
-> **Status update (2026-08-24):** built and ready to run — `live/e2e_latency_test.py` is done, self-tested (Mode A logic checks pass), and just needs to be run on the Pi. This was built *before* physical mic/headset hardware arrived, because it targets the existing `snd-aloop` loopback rather than a physical mic — see the note at the top of Section 4 for why that's still meaningful. **What it measures:** real device-I/O round-trip latency via `sounddevice.playrec()` through the actual configured devices — real PortAudio, real ALSA buffers, real driver/OS scheduling — plus an analytical full-pipeline estimate (device round-trip + measured inference + configured priming). **What it does not measure:** a single physically-unified number with a *running* pipeline's actual inference in the loop (that still needs either physical hardware or confirmed ALSA loopback topology — see the caveat below). Run it now:
-> ```bash
-> python live/e2e_latency_test.py --n-reps 20 --inference-ms 29.18 --output-json results/e2e_devroundtrip_pi.json
-> ```
-> Paste back the output. The rest of this section is preserved as the original design rationale.
+> **Status update (2026-08-24, DONE):** run on the Pi and verified. Result: **42.67 ms device round-trip** (median = p95 = min = max across 20 reps — deterministic digital `snd-aloop` loopback) → **~172 ms full-pipeline estimate** (round-trip + inference + 100ms priming). Getting here required fixing a real bug first: `config/audio_config.yaml` had `input_device`/`output_device` both pointing at the same `snd-aloop` device, which is silent by construction — ALSA loopback cross-pairs the two PCM devices, it doesn't loop one back to itself. Fixed (`input_device: 1`, `output_device: 0`); the test then read a real, consistent round-trip instead of exact zeros. See `docs/phase_5_summary.md` §7 and `progress.md` (2026-08-24 entry) for the full writeup. **What this still does not cover:** it's `snd-aloop`, not a physical microphone — P0-1 remains open, and this number should be re-verified once real hardware is available. The rest of this section is preserved as the original design rationale.
 
 **Why:** See Section 1. You cannot optimize what you have not measured, and the number you would currently quote is the wrong number.
 
@@ -157,12 +153,7 @@ aplay /tmp/mic_test.wav
 
 ### P0-3 · Reduce latency to real-time grade ⏱️ 3–5 h
 
-> **Status update (2026-08-24):** Step 1 (priming) is done in code — `live/pipeline.py`'s hardcoded `range(3)` priming loop is now a configurable `pipeline.priming_chunks` (default changed 3→1 in `config/audio_config.yaml`), reasoned from the measured p95 inference figure (39 ms of 100 ms budget = comfortable slack for 1 chunk). Step 2 (chunk-size sweep) has a ready-to-run harness — `scripts/sweep_chunk_size.py` — that sweeps candidate sizes and tabulates RTF/dropouts/latency automatically. **Neither has been validated on the Pi yet** — that requires running the commands below and confirming 0 dropouts, which is Mode B and needs your SSH session:
-> ```bash
-> python live/main.py stress --duration 60      # quick check: priming_chunks=1 doesn't underrun
-> python scripts/sweep_chunk_size.py            # full sweep across 100/50/20/10 ms
-> ```
-> If the 60 s quick check shows dropouts, revert `priming_chunks` to 2 in `config/audio_config.yaml` and retest before trying the full sweep. The rest of this section is preserved as the original design rationale.
+> **Status update (2026-08-24, DONE — with an honest gap against the target):** Step 1 (priming 3→1) and Step 2 (chunk-size sweep) both validated on the Pi. **100 ms chunk size selected and confirmed** via `scripts/sweep_chunk_size.py` + a full 10-minute `python live/main.py stress --duration 600`: PASS, 0 dropouts / 6001 chunks, RTF median 0.3823 / p95 0.4008, max temp 52.9°C. 20ms and 10ms fail the RTF≤0.6 budget outright; 50ms hits a sustained `snd-aloop` driver-level `input overflow` issue that survived two different application-level fix attempts (see `progress.md`'s 2026-08-24 entry for the full falsified-hypothesis writeup — a non-blocking-read fix was tried, tested, found to make things worse, and correctly reverted) and wasn't pursued further given the demo timeline. **Gap:** this section's own acceptance criterion was <150ms, ideally <100ms. The confirmed result is **~172ms** — real progress from the ~530ms estimate, but the target is not fully met. Closing it further needs either physical hardware (P0-1, may not share the 50ms `snd-aloop` issue) or P1-3 (ONNX/quantization to shrink inference and permit a smaller chunk). The rest of this section is preserved as the original design rationale.
 
 **Why:** ~530 ms is not deployable for interactive voice. This is where the project's biggest single quality improvement is available.
 
