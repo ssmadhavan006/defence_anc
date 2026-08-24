@@ -334,6 +334,8 @@ Generate an augmented evaluation set and report robustness alongside the clean-c
 
 **Backup video is non-negotiable.** Record a full successful demo run (screen + audio) and keep it on the presenting laptop. If the Pi fails to boot, USB enumeration reorders, or the venue is too noisy, you present the video and keep your credibility. **Also prepare pre-recorded before/after audio pairs** from `results/baselines/deepfilternet/` — those work even with no hardware at all.
 
+> **Status update (2026-08-24):** the before/after audio pair mechanism is built and demonstrated — `scripts/make_demo_clip.py` generates an illustrative clip (clean speech + engine noise + a real gunshot recording, mixed at a controlled SNR) and `models/deepfilternet/run_inference.py --input-dir` enhances it; one example was generated and sent to the user (real audio, listenable, not a mockup). **The deck itself and the screen-recorded backup video are still not started** — nothing exists in the repo for either. This remains the single largest non-hardware-blocked gap.
+
 ---
 
 ## 6. P2 — Stretch / Round 2 Differentiators

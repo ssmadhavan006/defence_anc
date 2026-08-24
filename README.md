@@ -77,6 +77,24 @@ uv run python scripts/audit_snr.py              # independent post-hoc SNR audit
 uv run python scripts/check_env_metrics.py      # metric library availability check
 ```
 
+### Processing your own audio (no dataset needed)
+
+`models/deepfilternet/run_inference.py --input-dir` enhances any `.wav`/`.flac` file(s) you point it at directly — file in, enhanced file out, no manifest or dataset setup required. Works the same on the dev machine or the Pi.
+
+```bash
+mkdir my_audio                         # put your noisy recording(s) in here
+uv run python models/deepfilternet/run_inference.py --input-dir my_audio --output-dir my_audio/enhanced
+```
+
+Output lands at `my_audio/enhanced/<name>_DeepFilterNet3.wav`. The input just needs speech and noise already mixed into one file (record it that way, or mix separate tracks in an editor first).
+
+To generate an illustrative before/after clip from the project's own noise corpus (clean speech + engine + a gunshot burst, mixed at a controlled SNR) instead of supplying your own audio:
+
+```bash
+uv run python scripts/make_demo_clip.py --output results/demo_audio/before_demo.wav --snr -5
+uv run python models/deepfilternet/run_inference.py --input-dir results/demo_audio --output-dir results/demo_audio/enhanced
+```
+
 ## Dataset
 
 Clean speech comes from LibriSpeech dev-clean; noise subtypes (engine idle, vehicle, helicopter rotor, crowd babble, gunshot, artillery, explosion) are sourced and license-audited in [data/SOURCES.md](data/SOURCES.md). Mixtures are generated at controlled SNRs with per-mixture seeds recorded alongside achieved SNRs and normalization factors in [data/manifest.csv](data/manifest.csv). Audio files themselves are not stored in git — the manifest regenerates the exact dataset anywhere.
@@ -95,6 +113,8 @@ results/charts/        category × method comparison charts
 live/                  real-time pipeline: ring buffer, inference engine, streaming orchestrator, latency/stress tests
 demo/                  terminal dashboard + live spectrogram for the judged demo
 config/                audio_config.yaml — hardware device IDs, chunk size, pipeline mode
+requirements.txt          Pi core deps — must always install cleanly (the live pipeline's demo path)
+requirements-optional.txt Pi optional deps (residual filter, ONNX backend, scipy) — never blocks the core install
 ```
 
 ## Project documentation
@@ -112,6 +132,11 @@ All phases complete (0–5). The offline batch pipeline (dataset, DSP baselines,
 - **Per-chunk inference** (Pi 5, in-memory, 10 reps): 29.18 ms median (RTF 0.29), 0-sample cross-correlation lookahead.
 - **End-to-end latency** (Pi 5, real `sounddevice`/PortAudio/ALSA device round-trip, 20 reps): 42.67 ms round-trip + inference + 100 ms priming ≈ **172 ms full-pipeline estimate**, chunk size 100 ms. Measured via `snd-aloop` loopback — a physical microphone/headset has not yet been integrated (open item, see `summary/02_NEXT_STEPS_PLAN.md` P0-1).
 - **10-minute stress test** (Pi 5, confirmed 100 ms chunk size): 600.5 s continuous run, 0 dropouts across 6001 chunks, max CPU temp 52.9 °C, RTF median 0.3823 / p95 0.4008.
-- **Demo tooling**: terminal dashboard (`demo/dashboard.py`) and live before/after spectrogram (`demo/spectrogram.py`), both with ENHANCE/BYPASS toggle.
+- **Demo tooling**: terminal dashboard (`demo/dashboard.py`) and live before/after spectrogram (`demo/spectrogram.py`), both with ENHANCE/BYPASS toggle. Offline batch enhancement of arbitrary audio files (`run_inference.py --input-dir`, see above) also verified on the Pi.
+
+Post-Phase-5 additions, all off by default / non-invasive to the demo path unless explicitly enabled:
+- **Data augmentation** (`data/augment.py`, `mix_dataset.py --augment-rir/--augment-clipping`): synthetic room-reverb + mic-overload clipping for a robustness-focused evaluation set, alongside the clean-condition baseline.
+- **Residual noise-suppression stage** (`live/residual_filter.py`, `pipeline.residual_filter: true`): reference-free adaptive filter after DeepFilterNet. Mechanically verified stable on the Pi (10-min stress, 0 dropouts); audio-quality impact not yet validated against the eval set, hence off by default.
+- **ONNX Runtime inference backend** (`models/deepfilternet/export_onnx.py`, `pipeline.inference_backend: onnx`): verified bit-exact vs PyTorch and ~42% faster on an x86_64 dev machine. **Not usable on this Pi's Python 3.13** — `onnx`'s `ml_dtypes` dependency requires `numpy≥2.1` there, which conflicts with `deepfilternet`'s `numpy<2.0` requirement; a hard upstream constraint, not a config issue. Optional dependencies for both of the above live in `requirements-optional.txt`, kept separate from `requirements.txt` so the core live pipeline's install can never be blocked by an optional feature.
 
 Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: PESQ-WB misses the >2.5 DRDO target on stationary (2.48) and non-stationary (2.13) noise on the full SNR-averaged evaluation — impulsive now passes (2.58) with the corrected gunshot/artillery dataset; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.
