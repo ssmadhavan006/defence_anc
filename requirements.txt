@@ -10,8 +10,19 @@ soundfile>=0.12.1
 # onnxruntime below, silently breaking deepfilternet -- this actually
 # happened on the Pi 2026-08-24 (`pip install -r requirements.txt` upgraded
 # numpy 1.26.4 -> 2.5.2, pip printed a dependency-conflict warning but
-# installed it anyway). Pin the upper bound here so it can't recur.
-numpy>=1.22.0,<2.0
+# installed it anyway).
+#
+# EXACT pin, not a range: an open range (numpy>=1.22.0,<2.0) let pip's
+# backtracking resolver wander into older numpy patch versions while trying
+# to jointly satisfy scipy/numba/onnx's ranges, even though numpy 1.26.4
+# already satisfied everything and was found first -- it ended up trying to
+# BUILD numpy 1.25.2 from source (no aarch64 wheel for that patch version)
+# and failed outright on Python 3.13 due to an unrelated pkg_resources/
+# setuptools incompatibility (`pkgutil.ImpImporter` was removed). An exact
+# pin removes numpy as a backtracking axis entirely -- confirmed 1.26.4 has
+# a prebuilt aarch64/cp313 wheel on piwheels (this exact version was already
+# cached on the Pi from before this file existed).
+numpy==1.26.4
 pyyaml>=6.0
 psutil>=5.9.0
 matplotlib>=3.5.0
