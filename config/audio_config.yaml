@@ -14,6 +14,15 @@ audio:
   # Processing chunk duration in seconds.
   # Smaller = lower latency, higher CPU. Keep >= 0.05 on Pi.
   # DFN3 expects at least 1 frame (10 ms). 0.1 s is a safe starting value.
+  # CONFIRMED on Pi 2026-08-24 via scripts/sweep_chunk_size.py + a full
+  # 10-minute python live/main.py stress run: 0.1s (100ms) is the chosen
+  # value -- 0 dropouts over 6001 chunks, RTF p95=0.40, max temp 52.9C,
+  # full pipeline estimate ~172ms. 50ms and smaller were tried and rejected:
+  # 50ms hits a sustained ALSA "input overflow" on this snd-aloop config
+  # (likely period-size negotiation, not an application-level bug -- see
+  # live/pipeline.py _output_callback history); 20ms/10ms fail the RTF<=0.6
+  # budget outright. Do not lower this without re-running both the sweep
+  # and the full 600s stress test.
   chunk_duration_sec: 0.1
 
   # Derived — do not edit; the code computes these at startup.
