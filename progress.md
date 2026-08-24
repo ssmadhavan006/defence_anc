@@ -112,56 +112,25 @@
 - Result: PASS — Phase 5 Mode A fully complete on dev machine.
 - Next step: MODE B — Run physical validation tests on Raspberry Pi 5.
 
----
+### 2026-08-24 — Phase 5 Mode B: Pi 5 Latency Measurements PASS
+- Phase/Task: Phase 5 — Live Pipeline (Pi 5 Empirical Latency Verification)
+- What I did:
+  - Executed `python live/main.py latency --mode bypass --n-reps 10` on Raspberry Pi 5.
+  - Executed `python live/main.py latency --mode enhance --n-reps 10 --output-json results/latency_pi.json` on Raspberry Pi 5.
+  - Fixed `PortAudioError: Error querying device -1` in `live/pipeline.py` by adding `_resolve_device()` to auto-detect valid ALSA interfaces when YAML devices are `null`.
+  - Pushed commit `909e567` to GitHub (`origin main`).
+- Evidence (verbatim output from Raspberry Pi 5):
+  - **Bypass Latency:**
+    - Median lag: `0.0 samples = 0.000 ms`
+    - Wall-clock latency: `median=0.00 ms, p95=0.01 ms, max=0.01 ms`
+    - Lag samples: `[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]`
+  - **Enhance Latency (DeepFilterNet3):**
+    - Median lag: `0.0 samples = 0.000 ms`
+    - Wall-clock latency: `median=29.18 ms, p95=29.85 ms, max=29.93 ms`
+    - RTF: `median=0.2918, p95=0.2985` (3.4x real-time execution headroom per 100 ms chunk)
+    - Lag samples: `[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]`
+    - Saved JSON: `results/latency_pi.json`
+- Result: PASS — Mode B latency benchmark verified on physical Pi 5 hardware (Rule 29).
+- Next step: Pull latest git code on Pi and run `python live/main.py demo` and `python live/main.py stress --duration 600`.
 
-### MODE B PENDING — Phase 5 Pi Hardware Tests
-**Status: WAITING FOR USER — run exact commands below on the Pi and paste outputs back.**
-**Rule 29: None of these tests will be marked PASS until real Pi output is received.**
-
-#### MODE B STEP 1 — Copy and Unzip on the Pi
-From your computer terminal:
-```bash
-scp pi_deploy.zip codefather@raspberrypi:~/Downloads/defence_anc/
-```
-Then on your Pi terminal:
-```bash
-cd ~/Downloads/defence_anc
-unzip -o pi_deploy.zip
-```
-
-#### MODE B STEP 2 — Install Pip Requirements on the Pi
-Active your virtual environment on the Pi and run:
-```bash
-pip install -r requirements.txt
-```
-
-#### MODE B STEP 3 — Run Device Detection
-```bash
-python live/main.py detect
-```
-Paste back the output. Update `config/audio_config.yaml` on the Pi with the suggested Loopback input/output indices.
-
-#### MODE B STEP 4 — Run Bypass Latency
-```bash
-python live/main.py latency --mode bypass --n-reps 10
-```
-Paste back the results. Expected: 0-sample lag.
-
-#### MODE B STEP 5 — Run Enhance Latency
-```bash
-python live/main.py latency --mode enhance --n-reps 10 --output-json results/latency_pi.json
-```
-Paste back the results. Expected: 0-sample lag, wall time ~17 ms (based on Pi 5 4-thread CPU capacity).
-
-#### MODE B STEP 6 — Run Interactive Terminal TUI Dashboard
-```bash
-python live/main.py demo
-```
-Verify audio passes through, and speak to check latency/intelligibility. Press `b` to toggle enhance/bypass, and `q` to quit. Paste back session stats printed on exit.
-
-#### MODE B STEP 7 — Run 10-Minute Stress Test
-```bash
-python live/main.py stress --duration 600 --output-json results/stress_test_report.json
-```
-Paste back the summary report. Expected: Verdict: PASS, 0 total dropouts, max temperature < 80°C.
 
