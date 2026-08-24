@@ -260,6 +260,43 @@ class LivePipeline:
     # Start / stop
     # ------------------------------------------------------------------
 
+def _resolve_device(dev_spec, kind="input"):
+    """
+    Resolves audio device specification for sounddevice InputStream/OutputStream.
+    If dev_spec is explicit (int or str), returns it directly.
+    If dev_spec is None, tries sd.default.device, then searches query_devices(),
+    or falls back to ALSA 'default' string to prevent PortAudioError(-1).
+    """
+    if dev_spec is not None:
+        return dev_spec
+
+    idx_pos = 0 if kind == "input" else 1
+    try:
+        def_dev = sd.default.device[idx_pos]
+        if isinstance(def_dev, int) and def_dev >= 0:
+            return def_dev
+    except Exception:
+        pass
+
+    try:
+        devs = sd.query_devices()
+        chk_key = "max_input_channels" if kind == "input" else "max_output_channels"
+        
+        for idx, d in enumerate(devs):
+            if d.get(chk_key, 0) > 0:
+                name = d.get("name", "").lower()
+                if "loopback" in name or "hw:" in name or "usb" in name:
+                    return idx
+                    
+        for idx, d in enumerate(devs):
+            if d.get(chk_key, 0) > 0:
+                return idx
+    except Exception:
+        pass
+
+    return "default"
+
+
     def start(self):
         """Load model, open streams, start inference thread."""
         print(f"[pipeline] Loading InferenceEngine (mode={self._mode})...", file=sys.stderr)
@@ -276,11 +313,15 @@ class LivePipeline:
         )
         self._inference_thread.start()
 
+        in_dev = _resolve_device(self._in_device, kind="input")
+        out_dev = _resolve_device(self._out_device, kind="output")
+        print(f"[pipeline] Opening streams (input_device={in_dev!r}, output_device={out_dev!r})...", file=sys.stderr)
+
         # Open input stream.
         self._stream_in = sd.InputStream(
             samplerate=self._sr,
             blocksize=self._chunk_samples,
-            device=self._in_device,
+            device=in_dev,
             channels=self._channels,
             dtype="float32",
             callback=self._input_callback,
@@ -290,7 +331,7 @@ class LivePipeline:
         self._stream_out = sd.OutputStream(
             samplerate=self._sr,
             blocksize=self._chunk_samples,
-            device=self._out_device,
+            device=out_dev,
             channels=self._channels,
             dtype="float32",
             callback=self._output_callback,
@@ -299,6 +340,7 @@ class LivePipeline:
 
         self._stream_in.start()
         self._stream_out.start()
+
 
         # Prime the output buffer with a few silence chunks so the output
         # callback doesn't underrun before inference produces output.
