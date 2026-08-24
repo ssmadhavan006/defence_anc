@@ -1552,6 +1552,23 @@ wheels = [
 ]
 
 [[package]]
+name = "onnx-ir"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "onnx", version = "1.19.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "sympy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/c2/61194cec0dbc5622273c0ebd592d37cc1dca0d7f1a744f02edd45ac905a3/onnx_ir-1.0.0.tar.gz", hash = "sha256:9e261f25fde8da9612ae5cb43b3b374d5ff469c04af0363cad588b2bb000b812", size = 163121, upload-time = "2026-08-11T14:49:46.895Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/cd/6d1637172eb59c7b18ac90ed089d1f599a11fe0e63b4db2d017f3bb38a32/onnx_ir-1.0.0-py3-none-any.whl", hash = "sha256:e578f0d608d3062866b48223616eb2d10a6d6d01f8b8faac596129034f483cc7", size = 185849, upload-time = "2026-08-11T14:49:45.524Z" },
+]
+
+[[package]]
 name = "onnxruntime"
 version = "1.20.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1640,6 +1657,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/96/eb/e6968f5e41aac3125f2ff5708855f09cb0b70d85ed3115b625b0b58305ba/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:2b80d8c7ec2cc7438e4da3760b88c24568cba72c9ace96d668800a6c79419acb", size = 23136745, upload-time = "2026-08-17T22:53:53.92Z" },
     { url = "https://files.pythonhosted.org/packages/b4/80/5b28f1f1111210fc4a336ddbc6950f468ebf9a6a265420568f4f43fa33ce/onnxruntime-1.29.0-cp312-cp312-win_amd64.whl", hash = "sha256:4acf2b4948b7ede87221ca6332344b8facdc8059d6ac751a7d367d04532b02dd", size = 14001407, upload-time = "2026-08-17T22:53:56.486Z" },
     { url = "https://files.pythonhosted.org/packages/6f/d6/6883f89ea4b044e6e8447ebfaf9bcecdf457b7d80a683635e130b25498e0/onnxruntime-1.29.0-cp312-cp312-win_arm64.whl", hash = "sha256:dc61a79cb39afd66ab3f01fd2c23591a7f01de89c1668e1fb6315067fc279164", size = 13746981, upload-time = "2026-08-17T22:53:58.977Z" },
+]
+
+[[package]]
+name = "onnxscript"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "onnx", version = "1.19.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onnx-ir" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/3a/4d79bce3f460e0df7fed54a92ce80827f25da66511da368bb00783ad8d20/onnxscript-0.7.1.tar.gz", hash = "sha256:309fb86484b11fa4ded90dba580e0d63f1a0827588e521cecaf2eeddb46d6e86", size = 618160, upload-time = "2026-06-29T23:33:21.526Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/bd/a0c8e737b6afda10e42a597787d53d5b66e00268df6f59184701eeae37d9/onnxscript-0.7.1-py3-none-any.whl", hash = "sha256:544763b7fdef49940cdd9412ff5135cbae96d59ac6bc1921457f21280f40f4b7", size = 721970, upload-time = "2026-06-29T23:33:23.298Z" },
 ]
 
 [[package]]
@@ -1914,6 +1949,7 @@ dependencies = [
     { name = "onnxruntime", version = "1.20.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "onnxruntime", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "onnxscript" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pystoi" },
@@ -1939,6 +1975,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.60.0" },
     { name = "onnx", specifier = ">=1.19.1" },
     { name = "onnxruntime", specifier = ">=1.20.1" },
+    { name = "onnxscript", specifier = ">=0.7.1" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pystoi", specifier = ">=0.4.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },

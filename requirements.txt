@@ -26,8 +26,19 @@ numpy==1.26.4
 pyyaml>=6.0
 psutil>=5.9.0
 matplotlib>=3.5.0
-scipy>=1.10.0
-numba>=0.58.0
+
+# scipy/numba: EXACT pins, same reasoning as numpy above. Open ranges
+# (scipy>=1.10.0, numba>=0.58.0) made pip's resolver backtrack through many
+# candidate versions of BOTH simultaneously (confirmed on the Pi 2026-08-24
+# it fetched metadata for numba 0.67.0 down through 0.60.0), eventually
+# reaching numba 0.60.0, which has no prebuilt wheel and fails to even
+# build on Python 3.13 (`RuntimeError: Cannot install on Python version
+# 3.13.5; only versions >=3.9,<3.13 are supported`) -- despite numba 0.67.0
+# already having a confirmed-available cp313/aarch64 wheel. Pinned to the
+# exact versions pip's own output showed succeeding at the metadata-fetch
+# step (i.e. confirmed to have a real wheel for this platform).
+scipy==1.18.1
+numba==0.67.0
 
 # P1-3: optional ONNX Runtime inference backend (live/inference_engine.py
 # backend="onnx"). Only needed if you run models/deepfilternet/export_onnx.py
@@ -39,3 +50,11 @@ numba>=0.58.0
 # against deepfilternet's numpy<2.0 constraint before allowing it.
 onnx>=1.22.0
 onnxruntime>=1.29.0
+# Needed even though models/deepfilternet/export_onnx.py never uses torch's
+# dynamo exporter (dynamo=True) -- on newer torch releases (confirmed: the
+# Pi's), torch.onnx.export() unconditionally imports pieces of the dynamo
+# exporter machinery internally at import time, regardless of which export
+# path actually runs. Missing this produced `ModuleNotFoundError: No module
+# named 'onnxscript'` from inside torch.onnx.export() itself on the Pi,
+# despite working fine without it on the dev machine's older torch version.
+onnxscript>=0.7.1
