@@ -165,12 +165,26 @@ def main():
         default=None,
         help="Path to save JSON results (optional)",
     )
+    parser.add_argument(
+        "--backend",
+        choices=["pytorch", "onnx"],
+        default="pytorch",
+        help="Inference backend (default: pytorch). 'onnx' requires "
+             "--onnx-dir pointing at models exported by "
+             "models/deepfilternet/export_onnx.py -- run that first.",
+    )
+    parser.add_argument(
+        "--onnx-dir",
+        default="results/onnx",
+        help="Directory with exported ONNX models (only used when --backend onnx)",
+    )
     args = parser.parse_args()
 
     chunk_samples = int(round(SR * args.chunk_sec))
 
     print(f"=== Phase 5 Latency Test ===")
     print(f"Mode         : {args.mode}")
+    print(f"Backend      : {args.backend}")
     print(f"Chunk        : {args.chunk_sec*1000:.0f} ms / {chunk_samples} samples @ {SR} Hz")
     print(f"Reps         : {args.n_reps} (+ {args.n_warmup} warmup)")
     print()
@@ -181,6 +195,8 @@ def main():
         atten_lim_db=100.0,
         warmup_passes=args.n_warmup,
         log_timing=False,
+        backend=args.backend,
+        onnx_dir=args.onnx_dir if args.backend == "onnx" else None,
     )
 
     print(f"Running {args.n_warmup} warmup + {args.n_reps} measurement reps...", flush=True)
@@ -208,6 +224,7 @@ def main():
     if args.output_json:
         os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
         result["hostname"] = _hostname()
+        result["backend"] = args.backend
         result["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
         with open(args.output_json, "w") as f:
             json.dump(result, f, indent=2)
