@@ -24,14 +24,16 @@ Evaluated on 300 synthetic mixtures (3 noise categories × 5 SNR levels from −
 |---|---|---|
 | Stationary (engine/vehicle) | +3.97 dB ΔSI-SNR · 0.90 STOI | **+11.10 dB ΔSI-SNR · 0.92 STOI · 2.48 PESQ-WB** |
 | Non-stationary (helicopter/crowd) | +2.86 dB ΔSI-SNR · 0.88 STOI | **+5.75 dB ΔSI-SNR · 0.83 STOI · 2.13 PESQ-WB** |
-| Impulsive (gunshot/artillery) | +0.47 dB ΔSI-SNR · 0.83 STOI | **+10.19 dB ΔSI-SNR · 0.92 STOI · 2.49 PESQ-WB** |
+| Impulsive (gunshot/artillery) | +0.27 dB ΔSI-SNR · 0.86 STOI | **+10.75 dB ΔSI-SNR · 0.93 STOI · 2.58 PESQ-WB** |
 
 Two findings drive the design argument:
 
-- **Adaptive filters fail structurally on impulsive noise.** NLMS loses 3.3 dB of SI-SNR on gunshot/artillery transients due to convergence lag — verified by zero-lag cross-correlation ablation to be inherent to gradient-based adaptation, not an alignment artifact.
-- **Deep learning closes the gap.** DeepFilterNet maintains ~10 dB improvement where classical methods collapse, reaching up to 2.92 PESQ-WB at high SNR (DRDO benchmark: > 2.5) and > 91% STOI.
+- **Adaptive filters fail structurally on impulsive noise.** NLMS *loses* 7.1 dB of SI-SNR on real gunshot/artillery transients (Zenodo Record 7004819, CC BY 4.0) due to convergence lag — verified by zero-lag cross-correlation ablation to be inherent to gradient-based adaptation, not an alignment artifact.
+- **Deep learning closes the gap.** DeepFilterNet maintains +10–11 dB improvement where classical methods collapse or stall. On impulsive noise it clears all three DRDO targets (SI-SNR > 15 dB, STOI > 0.85, **PESQ-WB > 2.5**) on the full SNR-averaged evaluation, not just at high input SNR.
 
-Full per-method tables live in [docs/phase_4_summary.md](docs/phase_4_summary.md); charts in `results/charts/`.
+Non-stationary is the one open gap, and it's narrower than the category number suggests: it's driven almost entirely by crowd/babble (other human speech — a single-channel enhancer structurally can't separate target speech from background speech, the cocktail-party problem), while helicopter alone scores STOI 0.91 / +8.9 dB ΔSI-SNR, on par with the strongest categories. See [docs/non_stationary_root_cause.md](docs/non_stationary_root_cause.md) for the subtype-level breakdown.
+
+Full per-method tables live in [docs/phase_4_summary.md](docs/phase_4_summary.md) and [results/final/target_compliance.md](results/final/target_compliance.md); charts in `results/charts/`.
 
 ## Getting started
 
@@ -90,6 +92,9 @@ models/deepfilternet/  DFN3 manifest-driven batch inference
 eval/                  PESQ-WB / STOI / SI-SNR engine + batch evaluator
 scripts/               downloads, orchestration, pilots, audits, diagnostics
 results/charts/        category × method comparison charts
+live/                  real-time pipeline: ring buffer, inference engine, streaming orchestrator, latency/stress tests
+demo/                  terminal dashboard + live spectrogram for the judged demo
+config/                audio_config.yaml — hardware device IDs, chunk size, pipeline mode
 ```
 
 ## Project documentation
@@ -101,4 +106,11 @@ results/charts/        category × method comparison charts
 
 ## Status
 
-Offline batch pipeline is complete and fully evaluated. Live real-time streaming on the Pi 5 (`sounddevice` capture → enhance → playback loop) is the next integration step — see architecture.md future TODOs.
+All phases complete (0–5). The offline batch pipeline (dataset, DSP baselines, DeepFilterNet, evaluation) is fully evaluated, and the real-time live pipeline is physically verified on Raspberry Pi 5 hardware:
+
+- **Live streaming**: `sounddevice` capture → ring buffer → DeepFilterNet3 → ring buffer → playback, running on-device (`live/pipeline.py`).
+- **Latency** (Pi 5, physical loopback, 10 reps): bypass 0.00 ms, enhance 29.18 ms median, 0-sample cross-correlation lag.
+- **10-minute stress test** (Pi 5): 600.3 s continuous run, 0 ring-buffer overflows, 0 underruns, max CPU temp 50.1 °C, RTF 0.378 median under live load.
+- **Demo tooling**: terminal dashboard (`demo/dashboard.py`) and live before/after spectrogram (`demo/spectrogram.py`), both with ENHANCE/BYPASS toggle.
+
+Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: PESQ-WB misses the >2.5 DRDO target on stationary (2.48) and non-stationary (2.13) noise on the full SNR-averaged evaluation — impulsive now passes (2.58) with the corrected gunshot/artillery dataset; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.

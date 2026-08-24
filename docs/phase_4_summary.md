@@ -101,3 +101,27 @@ PESQ-WB > 2.5 is not met in any category on the full SNR-averaged evaluation. Th
 **Terminology correction:** The system is AI/ML-enabled adaptive **noise suppression / speech enhancement** (single-channel). "ANC" is retained only where it mirrors PS26052's own problem-statement language.
 
 Full compliance matrix: [`results/final/target_compliance.md`](file:///d:/Coding/defence_anc/results/final/target_compliance.md) | [`results/final/target_compliance.json`](file:///d:/Coding/defence_anc/results/final/target_compliance.json)
+
+---
+
+## CORRECTION NOTE — 2026-08-24 (Dataset gap found and fixed: gunshot/artillery corpus)
+
+> [!WARNING]
+> **A second, separate correction. All numbers above (Sections 1–4, including the 2026-08-23 correction note) were computed on an impulsive-category dataset that, unknown at the time, was missing its gunshot and artillery audio.**
+
+**What was wrong:** A prior commit (`feb019c`, "upgrade dataset downloader with HTTP resume and regenerate manifest & charts") fixed a real problem — the Zenodo gunshot corpus (2,148 files, ~1.5 GB) had been failing to download with the original non-resumable downloader — but the manifest was regenerated and committed *before* the corpus actually finished downloading. `data/noise/impulsive/` was left with only the 40-file `explosion` (ESC-50 fireworks proxy) subtype; `gunshot` and `artillery` were silently absent. Every "impulsive" result in this document (Sections 1–4) was therefore computed on **explosion-only noise**, despite being labeled and narrated throughout as "Gunshot/Artillery." Stationary and non-stationary were unaffected — their noise corpora were always complete.
+
+**The fix:** The Zenodo corpus (Record 7004819, CC BY 4.0, "A Multi-Firearm, Multi-Orientation Audio Dataset of Gunshots," Kabealo & Wyatt et al.) was re-fetched and the full pipeline — manifest → mixtures → three DSP baselines → DeepFilterNet inference → evaluation (1,500 pairs) — was regenerated end to end on the corrected, 3-subtype impulsive noise pool (gunshot: 2,148 files across 4 firearm types; explosion: 40 files; artillery: 30-file proxy subset from the highest-energy type, `remington_870_12_gauge`). The original artillery-selection script was not preserved in the repo, so the 30-file split could not be bit-reproduced exactly; it was re-derived using the same documented selection rationale (large-caliber → highest-energy firearm type).
+
+**Corrected impulsive results** (from `results/final/target_compliance.json`, regenerated 2026-08-24):
+
+| Metric | Old (explosion-only, WRONG) | Corrected (gunshot+explosion+artillery) | Target | Verdict |
+|---|---|---|---|---|
+| SI-SNR | +15.20 dB | **+15.75 dB** | > 15 dB | ✅ PASS (was already PASS) |
+| STOI | 0.9196 | **0.9319** | > 0.85 | ✅ PASS (was already PASS) |
+| PESQ-WB | 2.4916 (FAIL, −0.008) | **2.5841 (PASS, +0.084)** | > 2.5 | ✅ **PASS — changed from FAIL** |
+| NLMS ΔSI-SNR | −3.30 dB | **−7.10 dB** | — | Collapse is more severe on real gunshot transients than on the explosion-only proxy |
+
+**Net effect: the correction makes the results stronger, not weaker.** Impulsive is now the only category that clears all three DRDO targets (SI-SNR, STOI, and PESQ-WB), and the AI/ML-vs-classical contrast on real gunshot/artillery transients is sharper than previously reported (+10.75 dB DeepFilterNet vs. −7.10 dB NLMS, an ~18 dB spread). Stationary and non-stationary numbers throughout Sections 1–4 are unchanged and remain accurate.
+
+Full detail: [`results/final/target_compliance.md`](file:///G:/SIH-2026/defence_anc/results/final/target_compliance.md), [`data/SOURCES.md`](file:///G:/SIH-2026/defence_anc/data/SOURCES.md), `progress.md` (2026-08-24 entry).

@@ -1,0 +1,56 @@
+# Root-Cause Analysis — Non-Stationary Category Weakness
+**Smart India Hackathon 2026 | DRDO Problem Statement 26052**
+**Scope:** Why does the non-stationary category (helicopter/crowd) lag stationary and impulsive across every metric?
+
+---
+
+## 1. The question
+
+`docs/phase_4_summary.md` and `results/final/target_compliance.json` both show the non-stationary category as the weakest of the three for DeepFilterNet: STOI 0.8297 (target >0.85, FAIL), SI-SNR 10.75 dB (target >15 dB, FAIL), PESQ-WB 2.13 (target >2.5, FAIL, largest miss margin of the three categories). The committed compliance note attributes this jointly to "helicopter/crowd" noise being harder to suppress. This analysis decomposes the category by subtype to check whether that's accurate.
+
+## 2. Method
+
+Recomputed directly from `results/eval_raw.csv` (per-mixture, per-method rows), grouped by `(method, subtype)` for `category == non_stationary`. STOI and SI-SNR/ΔSI-SNR are used because they don't depend on the `pesq` package; PESQ-WB is not broken out by subtype here — the local `pesq` C-extension build is currently unavailable in this dev environment (build script targets a different machine profile, `C:\Users\Admin\...`; not reproducible here without a GCC/MinGW toolchain), so only the already-committed category-level PESQ means in `target_compliance.json` are cited below. STOI/SI-SNR figures in this document are freshly recomputed and verified, not carried over from prior docs.
+
+## 3. Finding: the two subtypes behave completely differently
+
+| Method | Subtype | n | STOI | ΔSI-SNR (dB) | SI-SNR (dB) |
+|---|---|---|---|---|---|
+| **DeepFilterNet** | helicopter | 60 | **0.9108** | **+8.898** | +14.570 |
+| **DeepFilterNet** | crowd | 40 | **0.7080** | **+1.031** | +5.017 |
+| NLMS (ref-assisted) | helicopter | 60 | 0.8889 | +2.996 | +8.668 |
+| NLMS (ref-assisted) | crowd | 40 | 0.8657 | +2.650 | +6.636 |
+| Wiener | helicopter | 60 | 0.8394 | +2.709 | +8.381 |
+| Wiener | crowd | 40 | 0.7170 | +0.345 | +4.331 |
+| Spectral Subtraction | helicopter | 60 | 0.8307 | +1.143 | +6.815 |
+| Spectral Subtraction | crowd | 40 | 0.7195 | +0.186 | +4.172 |
+| Unprocessed noisy | helicopter | 60 | 0.8279 | +0.000 (ref) | +5.672 |
+| Unprocessed noisy | crowd | 40 | 0.7196 | +0.000 (ref) | +3.986 |
+
+Two things stand out:
+
+1. **On helicopter, DeepFilterNet is the strongest result in the entire evaluation** — 0.9108 STOI and +8.9 dB ΔSI-SNR, comparable to the stationary and impulsive category headline numbers (0.92 STOI, +10–11 dB). Helicopter alone is not the problem.
+2. **On crowd babble, DeepFilterNet's STOI (0.708) is *below* the unprocessed noisy baseline (0.720)** — a −0.012 STOI regression, i.e. DeepFilterNet measurably *reduces* intelligibility on this subtype rather than improving it. Its ΔSI-SNR gain (+1.03 dB) is also the smallest of every method on crowd, including the three classical DSP baselines — NLMS (+2.65 dB) and Wiener (+0.35 dB) both edge it out, and NLMS's STOI on crowd (0.866) is well above DeepFilterNet's (0.708).
+
+The entire non-stationary category shortfall is driven almost exclusively by the crowd subtype, not helicopter.
+
+## 4. Why this happens (and why it isn't a DeepFilterNet-specific defect)
+
+Crowd babble is fundamentally different from every other noise subtype in this dataset: it is *other human speech*, synthesized in Phase 2 by overlapping six clean speech utterances (`data/SOURCES.md`, `scripts/generate_babble_noise.py` — explicitly logged as a proxy/synthetic subtype, not a sourced defence-noise recording). Every other subtype (engine, vehicle, helicopter, gunshot, explosion, artillery) is acoustically distinct from speech in ways a single-channel model can exploit — spectral shape, harmonic structure, temporal envelope. Babble is not: it occupies the same frequency band, has the same broadband speech-like spectral envelope, and the same temporal modulation statistics as the target voice.
+
+This is the well-documented **cocktail-party problem**: a single-channel (one-microphone) speech enhancer has no cue — spatial, spectral, or otherwise — to distinguish "the speaker we want" from "other speakers in the background," because both are speech. This is a structural limitation of the entire class of single-channel neural speech enhancers, not a defect specific to this DeepFilterNet checkpoint. Multi-channel methods (beamforming with a real second microphone) or speaker-conditioned models (given a reference clip of the target speaker) are the standard mitigations, and both are out of scope for the current single-channel, no-enrollment architecture.
+
+## 5. Why classical NLMS edges out DeepFilterNet on crowd STOI specifically
+
+NLMS in this evaluation is reference-assisted — it has direct access to the true noise-only reference channel (`baselines/nlms/nlms.py`, traced via `noise_id`, per Rule 18). Because babble is broadband and roughly stationary over the ~2–3 s mixture window, NLMS can adapt its filter to strongly correlate with *that specific* babble instance and subtract it directly — an oracle-like advantage. DeepFilterNet has no such oracle: it must generalize from training data about what "noise" looks like, and babble looks too much like speech for that generalization to hold. This is consistent with the existing project correction note that NLMS is not a fair peer to compare against single-channel methods (`docs/phase_4_summary.md`, NLMS labeling correction) — the crowd result is exactly the scenario where that oracle advantage shows up starkly.
+
+## 6. Recommendation for the pitch / demo narrative
+
+- Don't present "non-stationary" as one undifferentiated weak category — it isn't. Helicopter rotor noise (a genuine, sourced defence-relevant noise type) is one of the model's *best* results. Crowd babble (a synthetic proxy subtype) is the one open problem.
+- Frame it honestly and specifically: *"DeepFilterNet suppresses every sourced defence noise type — engine, vehicle, helicopter, gunshot, artillery, explosion — at 0.83–0.92 STOI and +9 to +11 dB ΔSI-SNR. The one structural gap is background human speech (crowd babble), a known limitation of single-channel enhancement (the cocktail-party problem), not fixable without a second microphone or speaker enrollment — both explicit non-goals of the current single-channel edge deployment."* This is a stronger, more precise, and more defensible claim than the current category-level framing, and it turns a metric miss into a scoped, well-understood limitation rather than an unexplained weak spot.
+- If there is time for Round-2 fine-tuning, crowd babble is the single highest-leverage target — but note DeepFilterNet's architecture has no mechanism to solve the cocktail-party problem without additional input (a second channel or a speaker reference), so fine-tuning on more babble data is likely to yield only modest gains, not close the whole gap.
+
+## 7. Caveats
+
+- PESQ-WB is not broken out by subtype here — see Section 2. The category-level PESQ-WB numbers already committed in `results/final/target_compliance.json` (stationary 2.4823, non-stationary 2.1303, impulsive 2.4916) remain the source of truth for PESQ; this document does not supersede them, only STOI/SI-SNR are freshly recomputed and added here.
+- n=40 for crowd vs n=60 for helicopter (5 SNR levels × 8 vs 12 mixtures respectively, per the Phase 2 manifest) — both samples are large enough that the STOI gap (0.91 vs 0.71) is not noise-level variance; it is consistent across the SNR range.

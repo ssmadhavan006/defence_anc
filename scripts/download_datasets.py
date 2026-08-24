@@ -117,6 +117,67 @@ def setup_esc50(archive_path: str, noise_base_dir: str):
     print(f"ESC-50 extracted categories: {counts}")
     shutil.rmtree(extract_temp, ignore_errors=True)
 
+
+ZENODO_GUNSHOT_URL = "https://zenodo.org/api/records/7004819/files/edge-collected-gunshot-audio.zip/content"
+ZENODO_RECORD_PAGE = "https://zenodo.org/records/7004819"
+
+
+def setup_gunshot(archive_path: str, noise_base_dir: str, artillery_source_type: str = "remington_870_12_gauge", artillery_count: int = 30):
+    """
+    Extracts the Zenodo gunshot corpus and splits it into `gunshot` (the full
+    corpus, all firearm types) and `artillery` (a proxy subset drawn from the
+    highest-energy/largest-caliber firearm type) noise subtypes.
+
+    NOTE on automated download: Zenodo's anti-bot rate limiting blocks
+    scripted requests to this record ("Access to this resource has been
+    restricted due to unusual traffic from your network"), even a single
+    HEAD request, from at least some networks -- this is not something
+    retry/resume logic can fix. If `archive_path` doesn't exist, download it
+    manually via a normal browser session at ZENODO_RECORD_PAGE and save it
+    to `archive_path` before running this function.
+    """
+    if not os.path.exists(archive_path):
+        raise FileNotFoundError(
+            f"{archive_path} not found. Zenodo blocks automated downloads of this "
+            f"record from many networks -- download it manually via a browser at "
+            f"{ZENODO_RECORD_PAGE} and save it to {archive_path}, then re-run."
+        )
+
+    print("\n=== Extracting Zenodo Gunshot/Artillery Corpus ===")
+    extract_temp = os.path.join("data", "temp_gunshot_extract")
+    os.makedirs(extract_temp, exist_ok=True)
+    with zipfile.ZipFile(archive_path, "r") as z:
+        z.extractall(extract_temp)
+
+    src_root = glob.glob(os.path.join(extract_temp, "edge-collected-gunshot-audio"))
+    src_root = src_root[0] if src_root else extract_temp
+
+    firearm_types = [d for d in os.listdir(src_root) if os.path.isdir(os.path.join(src_root, d))]
+    gunshot_dir = os.path.join(noise_base_dir, "impulsive", "gunshot")
+    artillery_dir = os.path.join(noise_base_dir, "impulsive", "artillery")
+    os.makedirs(gunshot_dir, exist_ok=True)
+    os.makedirs(artillery_dir, exist_ok=True)
+
+    all_files = []
+    for ft in firearm_types:
+        all_files.extend(sorted(glob.glob(os.path.join(src_root, ft, "*.wav"))))
+
+    for f in all_files:
+        dest = os.path.join(gunshot_dir, os.path.basename(f))
+        if not os.path.exists(dest):
+            shutil.copy2(f, dest)
+
+    artillery_source = sorted(glob.glob(os.path.join(src_root, artillery_source_type, "*.wav")))
+    for f in artillery_source[:artillery_count]:
+        dest = os.path.join(artillery_dir, os.path.basename(f))
+        if not os.path.exists(dest):
+            shutil.copy2(f, dest)
+
+    print(f"Gunshot: {len(os.listdir(gunshot_dir))} files -> {gunshot_dir}")
+    print(f"Artillery: {len(os.listdir(artillery_dir))} files -> {artillery_dir} (from {artillery_source_type})")
+    shutil.rmtree(extract_temp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     downloads_dir = os.path.join("data", "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
@@ -126,6 +187,12 @@ if __name__ == "__main__":
     
     download_file(LIBRISPEECH_URL, libri_archive)
     download_file(ESC50_URL, esc_archive)
-    
+
     setup_librispeech(libri_archive, os.path.join("data", "clean"))
     setup_esc50(esc_archive, os.path.join("data", "noise"))
+
+    gunshot_archive = os.path.join(downloads_dir, "edge-collected-gunshot-audio.zip")
+    try:
+        setup_gunshot(gunshot_archive, os.path.join("data", "noise"))
+    except FileNotFoundError as e:
+        print(f"\n[SKIP] Gunshot/artillery corpus: {e}")

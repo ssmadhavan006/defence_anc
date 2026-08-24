@@ -34,7 +34,7 @@ def batch_inference(input_dir: str, output_dir: str, atten_lim_db: float = None,
     target_sr = df_state.sr()
     print(f"DeepFilterNet initialized (Native SR: {target_sr} Hz, Suffix: {suffix})")
     
-    wav_files = glob.glob(os.path.join(input_dir, "*.wav")) + glob.glob(os.path.join(input_dir, "**", "*.wav"), recursive=True)
+    wav_files = glob.glob(os.path.join(input_dir, "**", "*.wav"), recursive=True)
     if not wav_files:
         print(f"No .wav files found in {input_dir}")
         return []
@@ -118,36 +118,68 @@ def process_manifest(
 def run_self_test():
     """
     Minimal self-test for run_inference.py pipeline correctness.
+
+    Generates its own synthetic input rather than depending on a fixture
+    file under data/mixtures/ — that directory now holds the real 300-file
+    dataset (Phase 2 onward), not a standalone demo clip, so pointing the
+    self-test at it either failed (file missing) or silently reprocessed the
+    whole dataset (via batch_inference's directory glob) instead of running
+    a fast, isolated smoke check.
     """
-    test_input = "data/mixtures/noisy.wav"
-    test_out_dir = "results/test_enhanced"
-    assert os.path.exists(test_input), f"Self-test input missing: {test_input}"
-    
-    results = batch_inference(
-        input_dir=os.path.dirname(test_input),
-        output_dir=test_out_dir,
-        post_filter=False
-    )
-    assert len(results) > 0, "Self-test failed: no files processed"
-    out_file = results[0]["output"]
-    assert os.path.exists(out_file), f"Self-test output missing: {out_file}"
-    assert os.path.getsize(out_file) > 0, f"Self-test output empty: {out_file}"
-    print("Self-test PASSED successfully!")
+    import numpy as np
+
+    test_dir = "results/test_selftest_input"
+    test_out_dir = "results/test_selftest_output"
+    os.makedirs(test_dir, exist_ok=True)
+    test_input = os.path.join(test_dir, "synthetic_noisy.wav")
+
+    sr = 48000
+    duration_sec = 2.0
+    t = np.arange(int(sr * duration_sec)) / sr
+    rng = np.random.default_rng(0)
+    audio = (0.3 * np.sin(2 * np.pi * 300 * t) + 0.1 * rng.standard_normal(len(t))).astype(np.float32)
+    sf.write(test_input, audio, sr)
+
+    print(f"Initializing DeepFilterNet model for self-test...")
+    model, df_state, suffix = init_df(post_filter=False, log_level="ERROR")
+    target_sr = df_state.sr()
+
+    out_path = os.path.join(test_out_dir, "synthetic_noisy.wav")
+    elapsed = process_file(model, df_state, test_input, out_path, atten_lim_db=None)
+
+    assert os.path.exists(out_path), f"Self-test output missing: {out_path}"
+    assert os.path.getsize(out_path) > 0, f"Self-test output empty: {out_path}"
+    info = sf.info(out_path)
+    assert info.samplerate == target_sr, f"SR mismatch: expected {target_sr}, got {info.samplerate}"
+    enhanced, _ = load_audio(out_path, sr=target_sr)
+    assert not (torch.isnan(enhanced).any() or torch.isinf(enhanced).any()), "NaN/Inf in enhanced output"
+
+    print(f"Self-test PASSED successfully! ({elapsed*1000:.1f} ms, {info.duration:.2f}s audio, "
+          f"RTF={elapsed/info.duration:.4f})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DeepFilterNet Batch Inference Pipeline")
-    parser.add_argument("--manifest", default="data/manifest.csv", help="Manifest path for dataset processing")
-    parser.add_argument("--input-dir", "-i", default="data/mixtures", help="Input directory containing noisy wav files")
+    parser.add_argument("--manifest", default="data/manifest.csv", help="Manifest path for dataset processing (default mode)")
+    parser.add_argument("--input-dir", "-i", default=None,
+                         help="Process every .wav in this directory instead of the manifest "
+                              "(uses batch_inference(), output filenames get a model-suffix)")
     parser.add_argument("--output-dir", "-o", default="results/baselines/deepfilternet", help="Output directory for enhanced wav files")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of files to process")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of files to process (manifest mode only)")
     parser.add_argument("--atten-lim", type=float, default=None, help="Noise attenuation limit in dB")
     parser.add_argument("--post-filter", "--pf", action="store_true", help="Enable DeepFilterNet post-filter")
     parser.add_argument("--self-test", action="store_true", help="Run self-test sanity check")
-    
+
     args = parser.parse_args()
-    
+
     if args.self_test:
         run_self_test()
+    elif args.input_dir:
+        batch_inference(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            atten_lim_db=args.atten_lim,
+            post_filter=args.post_filter,
+        )
     else:
         process_manifest(
             manifest_path=args.manifest,

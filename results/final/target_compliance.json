@@ -1,10 +1,14 @@
 {
-  "generated": "2026-08-23",
+  "generated": "2026-08-24",
   "method": "DeepFilterNet3 (AI/ML speech enhancement)",
   "dataset": "300 mixtures (3 noise categories x 5 SNR levels x 20 speakers), 48 kHz, synthetic",
   "evaluation_pairs": 1500,
   "pesq_wb_valid": 1500,
   "pesq_wb_exclusions": 0,
+
+  "note_dataset_correction": "This is a REGENERATED evaluation (2026-08-24), superseding the 2026-08-23 version. The prior run's impulsive category noise pool was silently missing the gunshot (2148 files) and artillery (30 files) corpora -- data/noise/impulsive/ contained only the 40-file explosion (ESC-50 fireworks proxy) subtype, due to an incomplete Zenodo download that a manifest-regeneration commit (feb019c) papered over instead of surfacing. All 100 'impulsive' mixtures in that run were actually explosion-only, despite being labeled/reported as 'Gunshot/Artillery'. The gunshot/artillery corpus (Zenodo Record 7004819, CC BY 4.0) has been re-fetched and the full pipeline (manifest -> mixtures -> baselines -> DeepFilterNet -> evaluation) regenerated end to end. Stationary and non_stationary categories were never affected by this gap (their noise corpora were always complete) and their numbers are unchanged from the prior run.",
+
+  "note_artillery_reconstruction": "The original script that produced the documented 30-file 'artillery' proxy subset was not preserved in the repository, so it could not be bit-for-bit reproduced. The corpus (2148 files across 4 firearm types: glock_17_9mm_caliber, ruger_ar_556_dot223_caliber, 38s&ws_dot38_caliber, remington_870_12_gauge) was re-split using the same documented rationale (data/SOURCES.md: 'large-caliber firearm shots selected to simulate artillery') -- all 2148 files across all 4 types used as 'gunshot' (matches the documented count exactly), and the first 30 files (sorted, deterministic) from remington_870_12_gauge (12-gauge shotgun, the highest-energy/largest-caliber type of the four) used as the 'artillery' proxy subset.",
 
   "note_snr_substitution": "PS26052 states 'SNR > 15 dB' as a target. The evaluation uses SI-SNR (Scale-Invariant Signal-to-Noise Ratio) as the practical measurable substitute, because SI-SNR is computed against the paired clean reference (clean_ref_path) from the mixed corpus and is scale-invariant, making it a more rigorous and reproducible substitute than raw segSNR for this synthetic-dataset evaluation. This substitution is stated explicitly and does not apply to any claim about raw SNR on real hardware.",
 
@@ -27,49 +31,84 @@
       "PESQ_WB_mean": 2.4823,
       "PESQ_WB_pass": false,
       "PESQ_WB_verdict": "FAIL",
-      "PESQ_WB_note": "2.4823 < 2.5 target. Miss margin: 0.018. Passes at +10 dB input SNR (mean 2.76) and +15 dB (mean 2.92) but fails across the full -5 to +15 dB range."
+      "PESQ_WB_note": "2.4823 < 2.5 target. Miss margin: 0.018. Unchanged from prior run (stationary noise pool was never affected)."
     },
     "non_stationary": {
       "SI_SNR_mean_dB": 10.7485,
       "SI_SNR_pass": false,
       "SI_SNR_verdict": "FAIL",
-      "SI_SNR_note": "10.75 dB < 15 dB target. Non-stationary noise (helicopter/crowd) is harder to suppress; DeepFilterNet3 trained primarily on stationary noise profiles.",
+      "SI_SNR_note": "10.75 dB < 15 dB target. Driven almost entirely by the crowd/babble subtype -- see docs/non_stationary_root_cause.md for the subtype-level decomposition (helicopter alone: STOI 0.91, +8.9 dB dSI-SNR, on par with the strongest categories).",
       "STOI_mean": 0.8297,
       "STOI_pass": false,
       "STOI_verdict": "FAIL",
-      "STOI_note": "0.8297 < 0.85 target. Miss margin: 0.020.",
+      "STOI_note": "0.8297 < 0.85 target. Miss margin: 0.020. Unchanged from prior run (non-stationary noise pool was never affected).",
       "PESQ_WB_mean": 2.1303,
       "PESQ_WB_pass": false,
       "PESQ_WB_verdict": "FAIL",
       "PESQ_WB_note": "2.1303 < 2.5 target. Miss margin: 0.370. Largest gap across all categories."
     },
     "impulsive": {
-      "SI_SNR_mean_dB": 15.1950,
+      "SI_SNR_mean_dB": 15.7495,
       "SI_SNR_pass": true,
       "SI_SNR_verdict": "PASS",
-      "STOI_mean": 0.9196,
+      "STOI_mean": 0.9319,
       "STOI_pass": true,
       "STOI_verdict": "PASS",
-      "PESQ_WB_mean": 2.4916,
-      "PESQ_WB_pass": false,
-      "PESQ_WB_verdict": "FAIL",
-      "PESQ_WB_note": "2.4916 < 2.5 target. Miss margin: 0.008. Narrowest miss; passes at +10 dB input SNR (mean 2.76) and +15 dB (mean 2.92)."
+      "PESQ_WB_mean": 2.5841,
+      "PESQ_WB_pass": true,
+      "PESQ_WB_verdict": "PASS",
+      "PESQ_WB_note": "2.5841 > 2.5 target. Headroom: +0.084. PASSES with the corrected dataset (real gunshot/artillery corpus) -- the prior run's 2.4916 FAIL was measured on explosion-only noise, not the documented gunshot/artillery mix."
     }
   },
 
   "overall_summary": {
     "SI_SNR": "2 of 3 categories PASS (stationary, impulsive). Non-stationary FAILS at 10.75 dB.",
     "STOI": "2 of 3 categories PASS (stationary, impulsive). Non-stationary FAILS at 0.83.",
-    "PESQ_WB": "0 of 3 categories PASS overall. Stationary and impulsive narrowly miss (2.48, 2.49). Non-stationary substantially misses (2.13).",
-    "verdict": "DeepFilterNet3 meets DRDO targets on stationary and impulsive noise for SI-SNR and STOI. All categories fall short of PESQ-WB > 2.5 on the full SNR-averaged evaluation. Non-stationary noise is the most significant remaining gap across all three metrics."
+    "PESQ_WB": "1 of 3 categories PASS (impulsive, 2.58). Stationary narrowly misses (2.48, -0.018). Non-stationary substantially misses (2.13, -0.370).",
+    "verdict": "DeepFilterNet3 meets all three DRDO targets (SI-SNR, STOI, PESQ-WB) on impulsive noise with the corrected gunshot/artillery dataset, and meets SI-SNR/STOI (not PESQ-WB) on stationary noise. Non-stationary noise remains the significant gap across all three metrics, driven specifically by the crowd/babble subtype (see docs/non_stationary_root_cause.md), not helicopter."
   },
 
   "supplementary_pesq_by_snr_deepfilternet": {
-    "note": "SNR-conditional slice — illustrative, not the compliance verdict",
-    "snr_-5dB": {"mean_pesq_wb": 1.592, "n": 60},
-    "snr_0dB":  {"mean_pesq_wb": 2.094, "n": 60},
-    "snr_5dB":  {"mean_pesq_wb": 2.471, "n": 60},
-    "snr_10dB": {"mean_pesq_wb": 2.760, "n": 60, "pct_above_2_5": "76.7%"},
-    "snr_15dB": {"mean_pesq_wb": 2.923, "n": 60, "pct_above_2_5": "85.0%"}
+    "note": "SNR-conditional slices per category -- illustrative, not the compliance verdict. Recomputed 2026-08-24 from the corrected dataset; corrects a prior version of this table that appears to have applied the stationary category's per-SNR breakdown to more than one category.",
+    "stationary": {
+      "snr_-5dB": {"mean_pesq_wb": 1.7114, "n": 20, "pct_above_2_5": "0.0%"},
+      "snr_0dB":  {"mean_pesq_wb": 2.0874, "n": 20, "pct_above_2_5": "10.0%"},
+      "snr_5dB":  {"mean_pesq_wb": 2.5824, "n": 20, "pct_above_2_5": "45.0%"},
+      "snr_10dB": {"mean_pesq_wb": 2.8619, "n": 20, "pct_above_2_5": "80.0%"},
+      "snr_15dB": {"mean_pesq_wb": 3.1686, "n": 20, "pct_above_2_5": "100.0%"}
+    },
+    "non_stationary": {
+      "snr_-5dB": {"mean_pesq_wb": 1.4060, "n": 20, "pct_above_2_5": "0.0%"},
+      "snr_0dB":  {"mean_pesq_wb": 1.7426, "n": 20, "pct_above_2_5": "20.0%"},
+      "snr_5dB":  {"mean_pesq_wb": 2.2396, "n": 20, "pct_above_2_5": "35.0%"},
+      "snr_10dB": {"mean_pesq_wb": 2.5312, "n": 20, "pct_above_2_5": "55.0%"},
+      "snr_15dB": {"mean_pesq_wb": 2.7323, "n": 20, "pct_above_2_5": "80.0%"}
+    },
+    "impulsive": {
+      "snr_-5dB": {"mean_pesq_wb": 1.8654, "n": 20, "pct_above_2_5": "5.0%"},
+      "snr_0dB":  {"mean_pesq_wb": 2.4427, "n": 20, "pct_above_2_5": "45.0%"},
+      "snr_5dB":  {"mean_pesq_wb": 2.7215, "n": 20, "pct_above_2_5": "70.0%"},
+      "snr_10dB": {"mean_pesq_wb": 2.9382, "n": 20, "pct_above_2_5": "85.0%"},
+      "snr_15dB": {"mean_pesq_wb": 2.9528, "n": 20, "pct_above_2_5": "75.0%"}
+    }
+  },
+
+  "classical_baselines_reference_assisted_track": {
+    "note": "NLMS is a reference-assisted baseline (oracle second-channel noise reference), not directly comparable to single-channel methods.",
+    "stationary":     {"noisy": {"pesq_wb": 1.3801, "stoi": 0.8198, "delta_si_snr": 0.0000},
+                        "spectral_subtraction": {"pesq_wb": 1.4185, "stoi": 0.8225, "delta_si_snr": 1.2506},
+                        "wiener": {"pesq_wb": 1.4889, "stoi": 0.8329, "delta_si_snr": 3.2332},
+                        "nlms": {"pesq_wb": 1.4480, "stoi": 0.9010, "delta_si_snr": 3.9737},
+                        "deepfilternet": {"pesq_wb": 2.4823, "stoi": 0.9169, "delta_si_snr": 11.1011}},
+    "non_stationary": {"noisy": {"pesq_wb": 1.4047, "stoi": 0.7846, "delta_si_snr": 0.0000},
+                        "spectral_subtraction": {"pesq_wb": 1.4295, "stoi": 0.7862, "delta_si_snr": 0.7604},
+                        "wiener": {"pesq_wb": 1.4519, "stoi": 0.7905, "delta_si_snr": 1.7636},
+                        "nlms": {"pesq_wb": 1.3990, "stoi": 0.8796, "delta_si_snr": 2.8573},
+                        "deepfilternet": {"pesq_wb": 2.1303, "stoi": 0.8297, "delta_si_snr": 5.7509}},
+    "impulsive":      {"noisy": {"pesq_wb": 1.6638, "stoi": 0.8584, "delta_si_snr": 0.0000},
+                        "spectral_subtraction": {"pesq_wb": 1.6916, "stoi": 0.8591, "delta_si_snr": 0.1205},
+                        "wiener": {"pesq_wb": 1.6343, "stoi": 0.8593, "delta_si_snr": 0.2653},
+                        "nlms": {"pesq_wb": 1.3085, "stoi": 0.8183, "delta_si_snr": -7.0993},
+                        "deepfilternet": {"pesq_wb": 2.5841, "stoi": 0.9319, "delta_si_snr": 10.7502}}
   }
 }

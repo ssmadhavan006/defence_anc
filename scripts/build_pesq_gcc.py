@@ -1,10 +1,45 @@
+import glob
 import os
 import sys
+import sysconfig
 import subprocess
 import shutil
 import urllib.request
 import tarfile
 import numpy as np
+
+
+def _find_gcc() -> str:
+    """
+    Locate a usable gcc.exe. Checks PATH first, then falls back to scanning
+    common WinGet/Chocolatey install locations. Deliberately does not
+    hardcode a specific Windows user profile -- a prior version of this
+    script hardcoded `C:/Users/Admin/...`, which only worked on the machine
+    it was written on.
+    """
+    on_path = shutil.which("gcc")
+    if on_path:
+        return on_path
+
+    search_roots = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages"),
+        "C:/ProgramData/chocolatey/lib",
+        "C:/msys64",
+        "C:/mingw64",
+    ]
+    for root in search_roots:
+        if not root or not os.path.isdir(root):
+            continue
+        matches = glob.glob(os.path.join(root, "**", "gcc.exe"), recursive=True)
+        if matches:
+            return matches[0]
+
+    raise FileNotFoundError(
+        "No gcc.exe found on PATH or in common install locations. "
+        "Install a MinGW-w64 toolchain first, e.g.: "
+        "winget install --id BrechtSanders.WinLibs.POSIX.UCRT"
+    )
+
 
 def build_pesq_with_gcc():
     print("=== Building pesq with GCC ===")
@@ -43,9 +78,8 @@ def build_pesq_with_gcc():
     print(f"Running: {' '.join(cmd_cython)}")
     subprocess.run(cmd_cython, check=True)
 
-    gcc_bin = "C:/Users/Admin/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/gcc.exe"
-    if not os.path.exists(gcc_bin):
-        gcc_bin = "gcc"
+    gcc_bin = _find_gcc()
+    print(f"Using gcc: {gcc_bin}")
 
     # Python include and DLL path for Windows
     py_include = os.path.join(sys.base_prefix, "include")
@@ -60,9 +94,17 @@ def build_pesq_with_gcc():
     ]
     site_pesq_dir = os.path.join(sys.prefix, "Lib", "site-packages", "pesq")
     os.makedirs(site_pesq_dir, exist_ok=True)
-    pyd_out = os.path.join(site_pesq_dir, "cypesq.cp39-win_amd64.pyd")
 
-    py_dll = os.path.join(sys.base_prefix, "python39.dll")
+    # Build the .pyd filename from this interpreter's actual ABI tag
+    # (e.g. cp311-win_amd64), instead of a hardcoded cp39 that only matches
+    # a Python 3.9 environment.
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX")  # e.g. ".cp311-win_amd64.pyd"
+    pyd_out = os.path.join(site_pesq_dir, f"cypesq{ext_suffix}")
+
+    version_tag = f"{sys.version_info.major}{sys.version_info.minor}"
+    py_dll = os.path.join(sys.base_prefix, f"python{version_tag}.dll")
+    if not os.path.exists(py_dll):
+        raise FileNotFoundError(f"Expected Python DLL not found: {py_dll}")
 
     cmd_gcc = [
         gcc_bin, "-O3", "-shared",

@@ -93,7 +93,7 @@ def mix_signals(clean: np.ndarray, noise: np.ndarray, target_snr_db: float) -> T
     scaled_clean = clean * norm_factor
     return mixed, scaled_clean, float(achieved_snr_db), float(norm_factor)
 
-def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/noise", output_dir: str = "data/mixtures", manifest_path: str = "data/manifest.csv", total_target_mixtures: int = 300, seed: int = 42):
+def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/noise", output_dir: str = "data/mixtures", manifest_path: str = "data/manifest.csv", total_target_mixtures: int = 300, seed: int = 42, allow_partial_corpus: bool = False):
     """
     Generates synthetic dataset and updates manifest.csv.
     """
@@ -117,6 +117,7 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
     
     # Discover available noise files per category and subtype
     noise_pool = {}
+    missing_subtypes = []
     for cat, subtypes in CATEGORIES.items():
         noise_pool[cat] = {}
         for sub in subtypes:
@@ -127,6 +128,18 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
                 print(f"  [NOISE] Category '{cat}' / Subtype '{sub}': {len(files)} files")
             else:
                 print(f"  [WARNING] Category '{cat}' / Subtype '{sub}': No noise files found in {sub_dir}")
+                missing_subtypes.append(f"{cat}/{sub}")
+
+    if missing_subtypes and not allow_partial_corpus:
+        raise RuntimeError(
+            "Refusing to regenerate the manifest with an incomplete noise corpus "
+            f"(missing subtypes: {', '.join(missing_subtypes)}). Regenerating anyway "
+            "would silently collapse those categories onto their remaining subtypes and "
+            "produce a manifest that no longer matches what the dataset documentation "
+            "describes -- exactly what happened on 2026-08-24 with the gunshot/artillery "
+            "corpus (see docs/phase_4_summary.md correction note). Fetch the missing "
+            "noise files first, or pass --allow-partial-corpus to proceed deliberately."
+        )
                 
     # Balance target count across combinations: 3 categories x 5 SNR levels = 15 combinations
     # ~20 mixtures per combination = 300 total
@@ -230,7 +243,9 @@ if __name__ == "__main__":
     parser.add_argument("--manifest", default="data/manifest.csv", help="Output manifest.csv path")
     parser.add_argument("--count", type=int, default=300, help="Total target mixtures count")
     parser.add_argument("--seed", type=int, default=42, help="Master random seed")
-    
+    parser.add_argument("--allow-partial-corpus", action="store_true",
+                         help="Proceed even if some noise subtypes have no files (default: refuse and error)")
+
     args = parser.parse_args()
     generate_dataset(
         clean_dir=args.clean_dir,
@@ -238,5 +253,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         manifest_path=args.manifest,
         total_target_mixtures=args.count,
-        seed=args.seed
+        seed=args.seed,
+        allow_partial_corpus=args.allow_partial_corpus
     )
