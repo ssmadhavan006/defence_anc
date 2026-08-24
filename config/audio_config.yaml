@@ -25,12 +25,14 @@ audio:
   ring_buffer_duration_sec: 2.0
 
   # I/O device selection.
-  # Set to null to use the system default device.
-  # Set to an integer device index (from `python -m sounddevice`) or a
-  # partial string match to the device name.
-  # Example: "USB Audio" or 3
-  input_device: null
-  output_device: null
+  # Set to null to use the system default device (dev machine).
+  # On Raspberry Pi 5 with snd-aloop loaded:
+  #   run `python live/main.py detect` or `arecord -l` to confirm card numbers.
+  #   Both subdevices of card 2 (hw:2,0 and hw:2,1) support 32ch in+out.
+  #   Use index 0 for both (Loopback PCM hw:2,0) as a single full-duplex loopback.
+  # For a physical USB mic + headphones, set to the appropriate indices.
+  input_device: 0
+  output_device: 0
 
 model:
   # DeepFilterNet model variant. Only "DeepFilterNet3" is validated.

@@ -134,12 +134,14 @@ def _resolve_device(dev_spec, kind="input"):
 
     If dev_spec is an explicit int or str, return it as-is.
     If dev_spec is None, attempt to find a valid default via:
-      1. sd.default.device (PortAudio default)
+      1. sd.default.device (PortAudio default, only if >= 0)
       2. First loopback/USB device found in query_devices()
       3. First any-channel device in query_devices()
-      4. ALSA string "default" as last resort
-    This prevents PortAudioError: Error querying device -1 on Linux/ALSA
-    when no default device is configured.
+      4. Known snd-aloop ALSA hw: strings (hw:2,0 for input / hw:2,1 for output)
+      5. Integer 0 as absolute last resort (never the string "default" which
+         is not a valid ALSA device on many Pi configurations)
+    This prevents PortAudioError(-1) and ValueError('No ... matching default')
+    on Linux/ALSA when no PortAudio default is configured.
     """
     if dev_spec is not None:
         return dev_spec
@@ -154,24 +156,30 @@ def _resolve_device(dev_spec, kind="input"):
 
     try:
         devs = sd.query_devices()
-        chk_key = "max_input_channels" if kind == "input" else "max_output_channels"
+        if devs is not None and len(devs) > 0:
+            chk_key = "max_input_channels" if kind == "input" else "max_output_channels"
 
-        # Prefer loopback/USB/hw: named devices first
-        for idx, d in enumerate(devs):
-            if d.get(chk_key, 0) > 0:
-                name = d.get("name", "").lower()
-                if "loopback" in name or "hw:" in name or "usb" in name:
+            # Prefer loopback/USB/hw: named devices first
+            for idx, d in enumerate(devs):
+                if d.get(chk_key, 0) > 0:
+                    name = d.get("name", "").lower()
+                    if "loopback" in name or "hw:" in name or "usb" in name:
+                        return idx
+
+            # Fall back to any device with the right channel direction
+            for idx, d in enumerate(devs):
+                if d.get(chk_key, 0) > 0:
                     return idx
-
-        # Fall back to any device with the right channel direction
-        for idx, d in enumerate(devs):
-            if d.get(chk_key, 0) > 0:
-                return idx
     except Exception:
         pass
 
-    # Last resort — let ALSA/PortAudio pick "default"
-    return "default"
+    # query_devices() returned nothing (snd-aloop may not be loaded yet).
+    # Try the known snd-aloop Loopback hw: strings directly — card 2
+    # subdevice 0 handles input, subdevice 1 handles output on most Pi configs.
+    if kind == "input":
+        return "hw:2,0"
+    else:
+        return "hw:2,1"
 
 
 # ---------------------------------------------------------------------------
