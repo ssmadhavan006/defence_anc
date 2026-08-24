@@ -89,6 +89,7 @@ def _load_config(config_path: str) -> dict:
             "log_timing": False,
             "latency_warn_sec": 0.30,
             "warmup_passes": 3,
+            "priming_chunks": 1,
         },
     }
     if not os.path.exists(config_path):
@@ -215,6 +216,7 @@ class LivePipeline:
         self._atten_lim_db = float(model_cfg.get("atten_lim_db", 100.0))
         self._output_gain = float(model_cfg.get("output_gain", 1.0))
         self._warmup_passes = int(pipe_cfg.get("warmup_passes", 3))
+        self._priming_chunks = int(pipe_cfg.get("priming_chunks", 1))
         self._log_timing = bool(pipe_cfg.get("log_timing", False))
         self._latency_warn_sec = float(pipe_cfg.get("latency_warn_sec", 0.30))
         self._mode = (mode_override or pipe_cfg.get("mode", "enhance")).strip().lower()
@@ -234,6 +236,12 @@ class LivePipeline:
         # Timing stats.
         self._chunk_latencies = []   # seconds, enhance/bypass call only
         self._dropped_chunks = 0
+
+        # Last processed chunk, exposed for visual demos (e.g. demo/spectrogram.py).
+        # Benign read/write race with the inference thread is acceptable here —
+        # these are for display only, never used for audio-path decisions.
+        self.last_in_chunk = None    # mono float32, shape (chunk_samples,)
+        self.last_out_chunk = None   # mono float32, shape (chunk_samples,)
 
     # ------------------------------------------------------------------
     # Audio callbacks (called from sounddevice's internal C thread)
@@ -283,6 +291,7 @@ class LivePipeline:
             # chunk shape: (chunk_samples, channels)
             # InferenceEngine expects (n_samples,) or (1, n_samples) mono.
             mono = chunk[:, 0]   # Take channel 0; DeepFilterNet is single-channel.
+            self.last_in_chunk = mono
 
             t0 = time.perf_counter()
             if self._mode == "enhance":
@@ -309,6 +318,7 @@ class LivePipeline:
                 out_mono = out_mono[:self._chunk_samples]
             else:
                 out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
+            self.last_out_chunk = out_mono
             self._out_buf.write(out_mono[:, np.newaxis])
 
         print("[pipeline] Inference thread exiting.", file=sys.stderr)
@@ -366,10 +376,14 @@ class LivePipeline:
         self._stream_in.start()
         self._stream_out.start()
 
-        # Prime the output buffer with a few silence chunks so the output
-        # callback doesn't underrun before inference produces output.
+        # Prime the output buffer with silence chunks so the output callback
+        # doesn't underrun before inference produces the first real output.
+        # This is a FIFO -- every primed chunk is permanent standing latency
+        # (priming_chunks * chunk_duration_sec), not a one-time warmup cost.
+        # Keep this as small as the measured inference jitter allows; verify
+        # with stress_test.py after any change (0 dropouts required).
         silence = np.zeros((self._chunk_samples, self._channels), dtype=np.float32)
-        for _ in range(3):
+        for _ in range(self._priming_chunks):
             self._out_buf.write(silence)
 
         print(

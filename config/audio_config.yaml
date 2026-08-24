@@ -60,3 +60,15 @@ pipeline:
 
   # Number of warmup inference passes on startup (prevent first-chunk jitter).
   warmup_passes: 3
+
+  # Number of silence chunks pre-loaded into the output ring buffer at
+  # startup so the output callback doesn't underrun before the first real
+  # chunk is enhanced. THIS IS PERMANENT STANDING LATENCY, not one-time
+  # warmup cost -- it never drains (FIFO). priming_chunks * chunk_duration_sec
+  # is added to every measurement of end-to-end latency.
+  # Was hardcoded to 3 (= 300 ms @ 100 ms chunks) -- changed to 1 (2026-08-24)
+  # based on measured p95 inference latency (39 ms against a 100 ms chunk
+  # budget, i.e. ~61 ms of slack per chunk -- comfortably covered by 1 chunk
+  # of priming). Re-validate with `python live/main.py stress` (0 dropouts
+  # required) after changing this or chunk_duration_sec.
+  priming_chunks: 1

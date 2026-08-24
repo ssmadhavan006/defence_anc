@@ -11,6 +11,10 @@ try:
 except ImportError:
     from df_compat import init_df, enhance, load_audio
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 def get_cpu_temp() -> float:
     """
     Attempts to read CPU temperature on Raspberry Pi/Linux.
@@ -91,9 +95,17 @@ def run_benchmark(input_wav: str = "data/mixtures/noisy.wav", output_json: str =
     Executes the complete single-thread and 4-thread RTF benchmark protocol.
     """
     if not os.path.exists(input_wav):
-        print(f"Error: Input wav file not found at {input_wav}")
-        sys.exit(1)
-        
+        # data/mixtures/ now holds the real 300-file Phase 2 dataset, not the
+        # standalone 3 s synthetic clip this benchmark was originally written
+        # against (see docs/phase_0_1_summary.md). Regenerate that fixture on
+        # demand via its original generator rather than hard-failing --
+        # a fixed synthetic input is the correct choice here anyway, since an
+        # RTF benchmark should compare threads/runs on identical audio, not
+        # whatever happens to be first in the real dataset.
+        print(f"Input wav not found at {input_wav} -- generating the standard synthetic benchmark clip...")
+        from scripts.generate_test_audio import generate_test_audio
+        generate_test_audio(input_wav, duration_sec=3.0, sr=48000)
+
     print(f"=== DeepFilterNet RTF Benchmark ===")
     print(f"Machine Hostname: {os.uname().nodename if hasattr(os, 'uname') else os.getenv('COMPUTERNAME', 'unknown')}")
     print(f"Input file: {input_wav}")
