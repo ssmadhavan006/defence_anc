@@ -122,12 +122,12 @@ def run_dashboard(config_path: str):
                 temp = get_cpu_temp()
                 
                 # Buffer states
-                in_cap = pipeline._in_buf._capacity
-                in_filled = pipeline._in_buf.available()
+                in_cap = pipeline._in_buf.capacity
+                in_filled = pipeline._in_buf.available
                 in_fill_p = (in_filled / in_cap) * 100.0 if in_cap > 0 else 0
                 
-                out_cap = pipeline._out_buf._capacity
-                out_filled = pipeline._out_buf.available()
+                out_cap = pipeline._out_buf.capacity
+                out_filled = pipeline._out_buf.available
                 out_fill_p = (out_filled / out_cap) * 100.0 if out_cap > 0 else 0
                 
                 overflows = pipeline._in_buf.overflow_count

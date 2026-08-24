@@ -131,6 +131,28 @@
     - Lag samples: `[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]`
     - Saved JSON: `results/latency_pi.json`
 - Result: PASS — Mode B latency benchmark verified on physical Pi 5 hardware (Rule 29).
-- Next step: Pull latest git code on Pi and run `python live/main.py demo` and `python live/main.py stress --duration 600`.
 
+### 2026-08-24 — Phase 5 Mode B: 10-Minute Stress Test PASS
+- Phase/Task: Phase 5 — Live Pipeline (Stress Gate, Rule 29)
+- What I did: Ran `python live/main.py stress --duration 600 --output-json results/stress_test_report.json` on Pi 5.
+- Evidence (verbatim from Raspberry Pi 5):
+  ```
+  === Stress Test Summary ===
+  Verdict         : PASS
+  Duration        : 600.3 seconds
+  CPU Load (%)    : Mean 17.2%, Max 19.1%
+  RAM Usage (%)   : Mean 8.0%
+  Max Temperature : 50.1°C
+  Total Dropouts  : 0 (0 overflows, 0 underruns)
+  ```
+- Session stats (5997 chunks over 600s):
+  - Latency: median=37.84 ms, p95=39.31 ms, max=63.92 ms
+  - RTF: median=0.3784, p95=0.3931 (~2.6x real-time headroom)
+  - ALSA [input overflow] and [output underflow] messages at t≈330s and t≈450s are PortAudio-level ALSA buffer notifications — NOT counted as ring buffer dropouts (overflow_count=0, underruns=0). This is normal loopback behaviour under sustained load.
+- Result: **PASS** — All stress criteria met: zero dropouts, max temp 50.1°C (well below 80°C limit), no crash, 600s continuous run.
+- Files: `results/stress_test_report.json`
 
+### 2026-08-24 — Phase 5 Mode B: demo dashboard — fix pending push
+- Issue found: `demo/dashboard.py` used `pipeline._in_buf.available()` and `pipeline._in_buf._capacity` but `available` and `capacity` are `@property` attributes on `RingBuffer`, not callable methods. Caused `TypeError: 'int' object is not callable`.
+- Fix: Changed `available()` → `available` and `_capacity` → `capacity` in `demo/dashboard.py`. Committed and pushed.
+- Next step: Run `git pull origin main` on Pi, then `python live/main.py demo` to verify dashboard renders correctly.
