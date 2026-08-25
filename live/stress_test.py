@@ -46,22 +46,22 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
     config["pipeline"]["log_timing"] = False # Don't flood output
     
     pipeline = LivePipeline(config)
-    
-    print("Starting real-time audio pipeline in ENHANCE mode...", flush=True)
-    pipeline.start()
-    
+
     start_time = time.time()
     next_check = start_time + 10.0
     elapsed = 0.0
-    
+
     records = []
     has_failed = False
     failure_reason = ""
-    
-    print(f"{'Elapsed (s)':<12} | {'CPU (%)':<8} | {'RAM (%)':<8} | {'Temp (°C)':<10} | {'Overflows':<10} | {'Underruns':<10}")
-    print("-" * 68)
-    
+
     try:
+        print("Starting real-time audio pipeline in ENHANCE mode...", flush=True)
+        pipeline.start()
+
+        print(f"{'Elapsed (s)':<12} | {'CPU (%)':<8} | {'RAM (%)':<8} | {'Temp (°C)':<10} | {'Overflows':<10} | {'Underruns':<10}")
+        print("-" * 68)
+
         while elapsed < duration_sec:
             time.sleep(0.5)
             now = time.time()

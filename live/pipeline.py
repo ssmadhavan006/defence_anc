@@ -289,6 +289,7 @@ class LivePipeline:
         # every 10 s checkpoint, final count 1).
         self._dropped_chunks = 0
         self._teardown_underruns = 0
+        self._inference_errors = 0
 
         # Last processed chunk, exposed for visual demos (e.g. demo/spectrogram.py).
         # Benign read/write race with the inference thread is acceptable here —
@@ -361,41 +362,50 @@ class LivePipeline:
                 # Timeout waiting for input — loop and retry.
                 continue
 
-            # chunk shape: (chunk_samples, channels)
-            # InferenceEngine expects (n_samples,) or (1, n_samples) mono.
-            mono = chunk[:, 0]   # Take channel 0; DeepFilterNet is single-channel.
-            self.last_in_chunk = mono
+            try:
+                # chunk shape: (chunk_samples, channels)
+                # InferenceEngine expects (n_samples,) or (1, n_samples) mono.
+                mono = chunk[:, 0]   # Take channel 0; DeepFilterNet is single-channel.
+                self.last_in_chunk = mono
 
-            t0 = time.perf_counter()
-            if self._mode == "enhance":
-                enhanced = self._engine.enhance_chunk(mono)
-            else:
-                enhanced = self._engine.bypass_chunk(mono)
-            elapsed = time.perf_counter() - t0
-            self._chunk_latencies.append(elapsed)
+                t0 = time.perf_counter()
+                if self._mode == "enhance":
+                    enhanced = self._engine.enhance_chunk(mono)
+                else:
+                    enhanced = self._engine.bypass_chunk(mono)
+                elapsed = time.perf_counter() - t0
+                self._chunk_latencies.append(elapsed)
 
-            if self._log_timing or elapsed > self._latency_warn_sec:
-                audio_dur = self._chunk_samples / self._sr
-                rtf = elapsed / audio_dur
-                level = "WARN" if elapsed > self._latency_warn_sec else "INFO"
-                print(
-                    f"[pipeline] [{level}] chunk: {elapsed*1000:.2f} ms "
-                    f"(audio={audio_dur*1000:.0f} ms, RTF={rtf:.4f})",
-                    file=sys.stderr,
-                )
+                if self._log_timing or elapsed > self._latency_warn_sec:
+                    audio_dur = self._chunk_samples / self._sr
+                    rtf = elapsed / audio_dur
+                    level = "WARN" if elapsed > self._latency_warn_sec else "INFO"
+                    print(
+                        f"[pipeline] [{level}] chunk: {elapsed*1000:.2f} ms "
+                        f"(audio={audio_dur*1000:.0f} ms, RTF={rtf:.4f})",
+                        file=sys.stderr,
+                    )
 
-            # enhanced shape: (1, n_out) — write back as (n_out, 1) for ring buffer.
-            out_mono = enhanced[0]   # shape (n_out,)
-            # Trim or pad to chunk_samples to keep buffers aligned.
-            if len(out_mono) >= self._chunk_samples:
-                out_mono = out_mono[:self._chunk_samples]
-            else:
-                out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
+                # enhanced shape: (1, n_out) — write back as (n_out, 1) for ring buffer.
+                out_mono = enhanced[0]   # shape (n_out,)
+                # Trim or pad to chunk_samples to keep buffers aligned.
+                if len(out_mono) >= self._chunk_samples:
+                    out_mono = out_mono[:self._chunk_samples]
+                else:
+                    out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
 
-            # P1-1 residual stage: runs on DeepFilterNet's output, not bypass
-            # pass-through (there's no model residual to clean up there).
-            if self._mode == "enhance" and self._residual_filter is not None:
-                out_mono = self._residual_filter.process_chunk(out_mono)
+                # P1-1 residual stage: runs on DeepFilterNet's output, not bypass
+                # pass-through (there's no model residual to clean up there).
+                if self._mode == "enhance" and self._residual_filter is not None:
+                    out_mono = self._residual_filter.process_chunk(out_mono)
+            except Exception as exc:
+                # A single bad chunk must not kill this thread -- that would
+                # silently blackhole all audio output for the rest of the
+                # session with no crash and no further log line. Output
+                # silence for this chunk and keep going.
+                self._inference_errors += 1
+                print(f"[pipeline] [ERROR] inference chunk failed: {exc}", file=sys.stderr)
+                out_mono = np.zeros(self._chunk_samples, dtype=np.float32)
 
             self.last_out_chunk = out_mono
             self._out_buf.write(out_mono[:, np.newaxis])
@@ -525,7 +535,8 @@ class LivePipeline:
             f"p95={np.percentile(rtfs, 95):.4f}\n"
             f"  Input buffer overflows: {self._in_buf.overflow_count}\n"
             f"  Output buffer underruns: {self._dropped_chunks}"
-            f"  (+{self._teardown_underruns} during shutdown drain, not a failure)",
+            f"  (+{self._teardown_underruns} during shutdown drain, not a failure)\n"
+            f"  Inference errors: {self._inference_errors}",
             file=sys.stderr,
         )
 
