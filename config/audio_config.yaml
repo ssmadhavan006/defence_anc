@@ -44,7 +44,7 @@ audio:
   # 2026-08-24 (e2e click test read back exact zeros: peak=0.0, noise=0.0).
   # Play on device 0, capture on the paired device 1.
   # For a physical USB mic + headphones, set to the appropriate indices instead.
-  input_device: 1
+  input_device: 0
   output_device: 0
 
 model:
