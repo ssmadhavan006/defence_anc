@@ -183,6 +183,75 @@ def _auto_detect_device(kind="input"):
     return "hw:2,0" if kind == "input" else "hw:2,1"
 
 
+def _resolve_stream_samplerate(device, requested_sr, channels, kind="input"):
+    """
+    Return the sample rate to actually open the given device's stream at.
+
+    PortAudio's ALSA hostapi opens the device's raw "hw:" PCM directly (no
+    software rate conversion), so it fails with PaInvalidSampleRate whenever
+    a device's hardware doesn't natively support `requested_sr` -- e.g. a
+    conferencing speakerphone fixed at 16 kHz, used alongside a headset mic
+    that reports a 44.1 kHz default. `arecord -D plughw:...` doesn't hit
+    this because ALSA's "plug" wrapper resamples in software; PortAudio's
+    enumerated devices here are the raw (non-plug) PCMs, so this pipeline
+    does the equivalent resampling itself instead (see _resample()).
+
+    Uses sd.check_input/output_settings(), which validates against the
+    driver without actually opening a stream.
+    """
+    check_fn = sd.check_input_settings if kind == "input" else sd.check_output_settings
+    try:
+        check_fn(device=device, samplerate=requested_sr, channels=channels, dtype="float32")
+        return requested_sr
+    except Exception as exc:
+        try:
+            native_sr = int(round(sd.query_devices(device)["default_samplerate"]))
+        except Exception:
+            # Query itself failed -- return the requested rate so the
+            # subsequent sd.InputStream/OutputStream call raises the real,
+            # actionable PortAudioError instead of failing silently here.
+            return requested_sr
+        print(
+            f"[pipeline] {kind} device {device!r} does not support {requested_sr} Hz "
+            f"directly ({exc}). Opening at its native {native_sr} Hz instead and "
+            f"resampling {'up' if kind == 'input' else 'down'} to/from the "
+            f"{requested_sr} Hz processing rate in software.",
+            file=sys.stderr,
+        )
+        return native_sr
+
+
+def _resample(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
+    """
+    Lightweight linear-interpolation resampler, mono 1-D array in, 1-D out.
+
+    No scipy dependency on purpose -- scipy is deliberately kept OUT of
+    requirements.txt (see requirements-optional.txt: it previously made the
+    whole install ResolutionImpossible on the Pi's numpy<2.0 pin). Only used
+    on the live-mic/speaker I/O path when a device's hardware rate differs
+    from the DeepFilterNet processing rate; the offline eval path
+    (models/deepfilternet/run_inference.py, results/results.csv) never
+    touches this.
+    """
+    if sr_from == sr_to or x.shape[0] == 0:
+        return x
+    n_out = int(round(x.shape[0] * sr_to / sr_from))
+    if n_out <= 0:
+        return np.zeros(0, dtype=x.dtype)
+    src_idx = np.arange(x.shape[0])
+    dst_idx = np.linspace(0, x.shape[0] - 1, num=n_out)
+    return np.interp(dst_idx, src_idx, x).astype(x.dtype)
+
+
+def _resample_multi(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
+    """_resample() applied independently per channel. x shape (n, channels)."""
+    if sr_from == sr_to or x.shape[0] == 0:
+        return x
+    return np.stack(
+        [_resample(x[:, ch], sr_from, sr_to) for ch in range(x.shape[1])], axis=1
+    )
+
+
 def _resolve_device(dev_spec, kind="input"):
     """
     Resolve an audio device specifier for sounddevice.
@@ -242,6 +311,14 @@ class LivePipeline:
         self._ring_cap = int(round(self._sr * float(audio_cfg["ring_buffer_duration_sec"])))
         self._in_device = audio_cfg.get("input_device", None)
         self._out_device = audio_cfg.get("output_device", None)
+        # Actual hardware stream rates, resolved in start() -- may differ
+        # from self._sr (the fixed DeepFilterNet processing rate) when the
+        # input and output devices are physically different hardware with
+        # different native rates. See _resolve_stream_samplerate().
+        self._in_stream_sr = self._sr
+        self._out_stream_sr = self._sr
+        self._in_blocksize = self._chunk_samples
+        self._out_blocksize = self._chunk_samples
 
         self._atten_lim_db = float(model_cfg.get("atten_lim_db", 100.0))
         self._output_gain = float(model_cfg.get("output_gain", 1.0))
@@ -305,8 +382,11 @@ class LivePipeline:
         """Receive audio from the microphone and push to input ring buffer."""
         if status:
             print(f"[pipeline] Input status: {status}", file=sys.stderr)
-        # indata shape: (frames, channels), float32
-        self._in_buf.write(indata.copy())
+        # indata shape: (frames, channels), float32, at self._in_stream_sr.
+        chunk = indata
+        if self._in_stream_sr != self._sr:
+            chunk = _resample_multi(chunk, self._in_stream_sr, self._sr)
+        self._in_buf.write(chunk.copy())
 
     def _output_callback(self, outdata, frames, time_info, status):
         """Pull enhanced audio from output ring buffer and send to speakers."""
@@ -327,7 +407,16 @@ class LivePipeline:
         # wait is retained: it functions as a legitimate short grace period
         # for the inference thread, not a real-time violation in practice
         # (RTF stays well under 1 in all tested configs).
-        chunk = self._out_buf.read(frames, timeout=self._chunk_sec * 2)
+        # out_buf holds audio at self._sr (the processing rate); this
+        # callback needs `frames` samples at self._out_stream_sr (the
+        # device's actual hardware rate, which may differ -- see
+        # _resolve_stream_samplerate()). Read the equivalent duration at
+        # self._sr first, then resample to the device rate.
+        if self._out_stream_sr != self._sr:
+            read_frames = int(round(frames * self._sr / self._out_stream_sr))
+        else:
+            read_frames = frames
+        chunk = self._out_buf.read(read_frames, timeout=self._chunk_sec * 2)
         if chunk is None:
             # Buffer underrun — output silence to avoid glitches.
             outdata[:] = 0.0
@@ -338,6 +427,15 @@ class LivePipeline:
                 # an empty buffer here is expected, not a real-time miss.
                 self._teardown_underruns += 1
         else:
+            if self._out_stream_sr != self._sr:
+                chunk = _resample_multi(chunk, self._sr, self._out_stream_sr)
+            # Resampling rounds to the nearest sample count, which can be
+            # off by one relative to `frames` -- pad/trim to the exact size
+            # sounddevice expects for this callback.
+            if chunk.shape[0] < frames:
+                chunk = np.pad(chunk, ((0, frames - chunk.shape[0]), (0, 0)))
+            elif chunk.shape[0] > frames:
+                chunk = chunk[:frames]
             # Apply output gain and write to device buffer.
             outdata[:] = chunk * self._output_gain
 
@@ -456,16 +554,32 @@ class LivePipeline:
         # Resolve devices — prevents PortAudioError(-1) when config is null
         in_dev = _resolve_device(self._in_device, kind="input")
         out_dev = _resolve_device(self._out_device, kind="output")
+
+        # Resolve each stream's actual hardware rate independently — input
+        # and output are commonly different physical devices (e.g. a
+        # headset mic for input, a speaker for output) with different
+        # native sample rates, neither of which need equal self._sr.
+        self._in_stream_sr = _resolve_stream_samplerate(
+            in_dev, self._sr, self._channels, kind="input"
+        )
+        self._out_stream_sr = _resolve_stream_samplerate(
+            out_dev, self._sr, self._channels, kind="output"
+        )
+        self._in_blocksize = int(round(self._in_stream_sr * self._chunk_sec))
+        self._out_blocksize = int(round(self._out_stream_sr * self._chunk_sec))
+
         print(
             f"[pipeline] Opening streams "
-            f"(input_device={in_dev!r}, output_device={out_dev!r})...",
+            f"(input_device={in_dev!r} @ {self._in_stream_sr} Hz, "
+            f"output_device={out_dev!r} @ {self._out_stream_sr} Hz, "
+            f"processing @ {self._sr} Hz)...",
             file=sys.stderr,
         )
 
         # Open input stream.
         self._stream_in = sd.InputStream(
-            samplerate=self._sr,
-            blocksize=self._chunk_samples,
+            samplerate=self._in_stream_sr,
+            blocksize=self._in_blocksize,
             device=in_dev,
             channels=self._channels,
             dtype="float32",
@@ -474,8 +588,8 @@ class LivePipeline:
         )
         # Open output stream.
         self._stream_out = sd.OutputStream(
-            samplerate=self._sr,
-            blocksize=self._chunk_samples,
+            samplerate=self._out_stream_sr,
+            blocksize=self._out_blocksize,
             device=out_dev,
             channels=self._channels,
             dtype="float32",

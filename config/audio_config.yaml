@@ -35,17 +35,19 @@ audio:
 
   # I/O device selection.
   # Set to null to use the system default device (dev machine).
-  # On Raspberry Pi 5 with snd-aloop loaded:
-  #   run `python live/main.py detect` or `arecord -l` to confirm card numbers.
-  # snd-aloop does NOT loop a device back to itself -- it cross-pairs the two
-  # PCM devices on the card: audio played to hw:2,0 arrives on the CAPTURE
-  # side of hw:2,1, and vice versa. Using the same index for input and output
-  # (as this file used to) is silent by construction -- confirmed on-device
-  # 2026-08-24 (e2e click test read back exact zeros: peak=0.0, noise=0.0).
-  # Play on device 0, capture on the paired device 1.
-  # For a physical USB mic + headphones, set to the appropriate indices instead.
-  input_device: 0
-  output_device: 0
+  # Run `python live/main.py detect` or `arecord -l` to confirm current
+  # indices -- USB enumeration order can change across reboots/replugs.
+  #
+  # Real-hardware setup (not snd-aloop): headset mic for input, Jabra
+  # Speak 710 speakerphone for output. These are two different physical
+  # devices with two different native sample rates (headset ~44.1 kHz,
+  # Jabra ~16 kHz) -- live/pipeline.py resolves each stream's actual
+  # hardware rate independently and resamples to/from sample_rate above
+  # (see _resolve_stream_samplerate/_resample in live/pipeline.py), so
+  # input_device and output_device do NOT need to be the same index or
+  # share a native rate.
+  input_device: 1   # USB Audio Device (headset mic)
+  output_device: 0  # Jabra Speak 710 (speaker)
 
 model:
   # DeepFilterNet model variant. Only "DeepFilterNet3" is validated.
