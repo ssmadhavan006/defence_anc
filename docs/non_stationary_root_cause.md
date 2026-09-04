@@ -4,6 +4,49 @@
 
 ---
 
+> [!IMPORTANT]
+> **Root cause SUPERSEDED 2026-09-04 (corpus v2, Rule 27). This document's decomposition is still
+> correct; its explanation is incomplete.**
+>
+> This analysis correctly localised the non-stationary failure to the `crowd` subtype (Section 3:
+> crowd STOI 0.7212 / PESQ-WB 1.7155 vs helicopter 0.9082 / 2.5443) and attributed it to the
+> **cocktail-party problem** — a genuine, structural limitation of single-channel enhancement.
+> That attribution is not wrong, but it is not the whole cause, and on its own it understates
+> the problem.
+>
+> The deeper cause, found 2026-09-04, is that **the `crowd` task was ill-posed as constructed**:
+> `scripts/generate_babble_noise.py` drew its babble from `data/clean` — the *same pool the target
+> speech comes from* — with no speaker or utterance exclusion, and that pool contains only
+> **2 unique LibriSpeech speakers** (2035, 2277) across 150 files. Measured by reproducing the
+> generator's seeded sampling against the v1 manifest:
+>
+> ```
+> crowd mixtures in manifest: 40
+>   target utterance literally inside its own babble interferer: 4/40
+>   target SPEAKER present inside its own babble interferer:     39/40
+> ```
+>
+> In 39 of 40 crowd mixtures the interferer contained the target speaker's own voice. Those
+> mixtures have **no defined correct answer** — separating a speaker from themselves is not a hard
+> problem, it is an unsatisfiable one. So the crowd numbers in Section 3 measure an unsatisfiable
+> task, not merely a difficult one.
+>
+> **This also supersedes the Phase 3 T6 explanation.** The oracle-reference NLMS scoring *worse*
+> (PESQ 1.399) than DeepFilterNet3 alone (2.13) was previously explained as reference-channel
+> contamination. The actual reason is that the "oracle" reference partly *was* the target signal,
+> so subtracting it removed target speech.
+>
+> **Consequence:** the `crowd` subtype was retired from the corpus on 2026-09-04 and replaced with
+> `wind` + `aircraft`. See `docs/corpus_redefinition_v2.md` for the pre-registered rationale and for
+> the binding rules on how the resulting v1→v2 number changes may be described. Note in particular
+> that the cocktail-party limitation was **removed from scope, not solved** — a genuine crowd-babble
+> scenario (real, disjoint speakers) would still be hard for a single-channel enhancer, and that
+> remains a real and disclosed limitation of this system.
+>
+> Everything below is preserved unchanged as the record of the subtype decomposition.
+
+---
+
 ## 1. The question
 
 `docs/phase_4_summary.md` and `results/final/target_compliance.json` both show the non-stationary category as the weakest of the three for DeepFilterNet: STOI 0.8334 (target >0.85, FAIL), SI-SNR 10.86 dB (target >15 dB, FAIL), PESQ-WB 2.21 (target >2.5, FAIL, largest miss margin of the three categories) — figures as of the Phase 3 T4-tuned (`atten_lim_db=30`) configuration; the pre-tuning numbers (STOI 0.8297, SI-SNR 10.75 dB, PESQ-WB 2.13) tell the same story. The committed compliance note attributes this jointly to "helicopter/crowd" noise being harder to suppress. This analysis decomposes the category by subtype to check whether that's accurate.

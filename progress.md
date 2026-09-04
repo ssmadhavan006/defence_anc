@@ -2,6 +2,7 @@
 
 ## CURRENT STATUS
 - Phase: **5 — COMPLETE** ✅ | Post-Phase-5 hardening COMPLETE ✅ | Latency engineering (P0-2/P0-3) COMPLETE on loopback ✅ | P0-1/P0-4/P0-5 COMPLETE on real hardware ✅ | P1-1/P1-3/P1-4 COMPLETE (dev-verified; P1-3 confirmed non-viable on the Pi's Python 3.13) ✅ | **Phase 2 (latency engineering, phase2_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware) outstanding | **Phase 3 (quality validation, phase3_plan.md) COMPLETE, dev-only, no hardware needed** ✅ — T9 optional live spot-check joins the deferred Pi batch (Track B). | **Phase 4 (WOW factors, phase4_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware: B1–B6) outstanding.
+- **Corpus v2 (2026-09-04, latest work): compliance 6/9 -> 8/9.** The `non_stationary` `crowd` subtype was audited and found **ill-posed, not merely hard** — babble was drawn from the same 2-speaker `data/clean` pool as the target speech with no exclusion, so **39/40** crowd mixtures contained the target speaker's own voice inside the interferer (4/40 the literal same utterance). It was retired and replaced with `wind` + `aircraft` (ESC-50, already on disk). Replacement classes were **pre-registered on threat-model grounds before any metric was computed** (`docs/corpus_redefinition_v2.md`). `stationary`/`impulsive` are byte-identical controls and reproduced to 4 decimals, so the change is fully isolated. **This altered the evaluation, not the system** — the pipeline is bit-identical across it, and the cocktail-party limitation was removed from scope, not solved. `non_stationary` SI-SNR **still FAILS** (14.1758 vs >15, uniform across all three subtypes), reported as a miss per Rule 33. Also found: a stale-output hazard that would have silently evaluated v2 mixtures against v1 audio (see the entry for detail). New: `eval/make_compliance_report.py` — the compliance verdict is now computed by a command instead of hand-assembled. Open defect, deliberately deferred: the clean pool uses 2 of 40 available `dev-clean` speakers.
 - Last updated: 2026-09-04
 
 ---
@@ -1432,3 +1433,252 @@ PESQ computed from `results/eval_raw_tuned_confirm.csv`, `category=='non_station
 ### Result
 **PASS.** DoD-8 met. All Phase 3 tasks (T0–T8) complete; T9 (optional live spot-check) is Track B, joins
 the deferred Pi batch per project convention, not a Phase 3 gate.
+
+---
+
+## 2026-09-04 — Corpus v2: `non_stationary` redefinition (between Phase 4 Track A and Phase 5)
+
+- **Phase/Task:** Corpus redefinition (Option A). Plan + pre-registration: `docs/corpus_redefinition_v2.md`.
+- **Mode:** A (dev machine, no hardware). Machine: Windows 11 dev PC, Python 3.9.25 (Rule 5 — every
+  number below is dev-machine; nothing here is a Pi measurement).
+
+### Why this was done
+
+The `non_stationary` category was 0/3 on DRDO targets and had been root-caused (Phase 3 T6,
+`docs/non_stationary_root_cause.md`) to the `crowd` subtype and the cocktail-party problem. Before
+accepting that as structural, the subtype's construction was audited. **Two independent defects were
+found, one of them serious:**
+
+1. **Wrong problem class.** Multi-talker babble is speaker separation, not speech enhancement, and is
+   not what the PS26052 battlefield threat model means by non-stationary noise.
+
+2. **The `crowd` task was ill-posed, not merely hard.** `scripts/generate_babble_noise.py` drew babble
+   from `data/clean` — the *same pool the target speech comes from* — with no speaker or utterance
+   exclusion (`generate_babble_noise.py:67,76` vs `data/mix_dataset.py:143,197`), and that pool holds
+   only **2 unique LibriSpeech speakers**. Measured by reproducing the generator's seeded sampling
+   against the v1 manifest:
+
+   ```
+   clean pool: 150 files, 2 unique LibriSpeech speakers
+   crowd mixtures in manifest: 40
+     target utterance literally inside its own babble interferer: 4/40
+     target SPEAKER present inside its own babble interferer:     39/40
+   ```
+
+   39/40 crowd mixtures contained the target speaker's own voice inside the interferer. Those
+   mixtures have no defined correct answer — separating a speaker from themselves is unsatisfiable,
+   not difficult.
+
+   **This supersedes the Phase 3 T6 explanation (Rule 27).** The oracle-reference NLMS scoring *worse*
+   (PESQ 1.399) than DeepFilterNet3 alone (2.13) was attributed to reference-channel contamination.
+   The real cause: the "oracle" reference partly *was* the target signal, so subtracting it removed
+   target speech. Correction note added to `docs/non_stationary_root_cause.md`, original preserved.
+
+### What changed
+
+`non_stationary` subtypes: `helicopter, crowd` -> `helicopter, wind, aircraft`. `crowd` retired.
+`wind` (ESC-50 class 16) and `aircraft` (ESC-50 class 47 `airplane`) extracted from the ESC-50 archive
+already on disk (no new download, Rule 15; same CC BY-NC 3.0 licence as existing ESC-50 subtypes).
+
+**Replacement classes were pre-registered in `docs/corpus_redefinition_v2.md` section 3 BEFORE any
+metric was computed**, chosen on threat-model relevance only. No candidate was screened by score. This
+is the guard against picking whichever class happened to score best.
+
+Nothing else changed: same clean pool, SNR grid, seeds, mixture count, model, `atten_lim_db=30`, and
+all evaluation code.
+
+### Commands run (all output real, Rule 1)
+
+```
+python scripts/extract_esc50_subtype.py --self-test               -> ALL PASSED (5 tests)
+python scripts/extract_esc50_subtype.py --class-name wind     --dest data/noise/non_stationary/wind      -> 40 files
+python scripts/extract_esc50_subtype.py --class-name airplane --dest data/noise/non_stationary/aircraft  -> 40 files
+python data/mix_dataset.py
+python scripts/run_all_baselines.py
+python models/deepfilternet/run_inference.py --output-dir results/baselines/deepfilternet
+python models/deepfilternet/run_inference.py --atten-lim 30 --output-dir results/baselines/deepfilternet_tuned
+python eval/run_eval.py --extra-methods deepfilternet_tuned
+python eval/make_compliance_report.py
+```
+
+Verbatim evidence:
+
+```
+Total Mixtures Generated: 300
+Manifest Row Count Verified: 300 == 300 mix files, 300 clean ref files      <- Rule 16
+Audio Sample Rate: 48000 Hz (All verified)                                  <- Rule 14
+Achieved SNR Mean Deviation: 0.0000 dB | Max Deviation: 0.0000 dB           <- Rule 13
+
+All 3 baselines finished in 54.73s total.
+All baseline sanity checks PASSED 100%.                                     <- Rule 21
+DeepFilterNet processing finished in 91.37s (0 skipped, 300 processed).     <- untuned
+DeepFilterNet processing finished in 64.72s (0 skipped, 300 processed).     <- tuned, atten=30
+Evaluation loop complete in 423.94s.
+Total Evaluation Rows: 1800 / 1800
+Total Rule-24 Exclusions Logged: 0                                          <- Rules 24/26
+```
+
+### BUG FOUND during this work: stale-output hazard in the batch scripts
+
+`scripts/run_all_baselines.py` has no argparse — invoking it with `--help` **executed the full batch**.
+It completed in 14.71s reusing v1 outputs against the freshly regenerated v2 mixtures, because both it
+and `run_inference.py` skip files whose output already exists (Rule 20 idempotency). The clean run,
+after clearing the output directories, took **54.73s**. Had the directories not been cleared, the
+entire v2 evaluation would have been silently computed on **v1 audio**. All output dirs were cleared
+and every stage re-run; all stages confirm `0 skipped, N processed`.
+
+Rule 20's idempotency is a convenience, not a correctness guarantee once inputs change underneath the
+outputs. Not fixed in code here (out of scope for this change) — logged as a live hazard for any future
+dataset regeneration.
+
+### CONTROL CHECK (the validity test for this whole change)
+
+`stationary` and `impulsive` inputs are byte-identical between v1 and v2 (verified: manifest
+`(category, subtype, snr_db, clean_id, noise_id)` tuples compare equal). Their metrics must therefore
+reproduce exactly, or the run is invalid:
+
+| Category | Metric | v1 | v2 | Match |
+|---|---|---|---|---|
+| stationary | PESQ-WB | 2.5385 | 2.5385 | IDENTICAL |
+| stationary | STOI | 0.9128 | 0.9128 | IDENTICAL |
+| stationary | SI-SNR | 16.1093 | 16.1093 | IDENTICAL |
+| impulsive | PESQ-WB | 2.5428 | 2.5428 | IDENTICAL |
+| impulsive | STOI | 0.9194 | 0.9194 | IDENTICAL |
+| impulsive | SI-SNR | 15.2402 | 15.2402 | IDENTICAL |
+
+All 6 control cells reproduce to 4 decimal places. The change is fully isolated to `non_stationary`.
+
+### Result: 6/9 -> 8/9 cells PASS. Non-stationary SI-SNR still FAILS.
+
+| Category | SI-SNR >15 dB | STOI >0.85 | PESQ-WB >2.5 |
+|---|---|---|---|
+| `stationary` | 16.1093 PASS | 0.9128 PASS | 2.5385 PASS |
+| `non_stationary` | **14.1758 FAIL** | 0.9027 PASS | 2.5448 PASS |
+| `impulsive` | 15.2402 PASS | 0.9194 PASS | 2.5428 PASS |
+
+`non_stationary` v1 -> v2: PESQ 2.2128 -> 2.5448 (FAIL->PASS), STOI 0.8334 -> 0.9027 (FAIL->PASS),
+SI-SNR 10.8566 -> 14.1758 (**FAIL -> still FAIL**, miss margin 0.824 dB).
+
+**These movements are NOT a system improvement.** The enhancement pipeline is bit-identical across this
+change; the benchmark was redefined. `docs/corpus_redefinition_v2.md` section 6 sets binding rules on
+how this may be described. In particular: the cocktail-party limitation was **removed from scope, not
+solved** — a real crowd-babble scenario with disjoint speakers would still be hard, and that remains a
+disclosed limitation of single-channel enhancement.
+
+### The remaining failure is uniform, not another hidden defect
+
+Per-subtype (new in `eval/make_compliance_report.py`, added precisely because category means are what
+hid the `crowd` defect):
+
+| Subtype | SI-SNR (dB) | STOI | PESQ-WB | n |
+|---|---|---|---|---|
+| `non_stationary/aircraft` | 14.4084 | 0.9097 | 2.5461 | 36 |
+| `non_stationary/helicopter` | 14.2873 | 0.8992 | 2.4939 | 36 |
+| `non_stationary/wind` | 13.7335 | 0.8982 | 2.6085 | 28 |
+
+All three subtypes sit in a 13.73-14.41 dB band. No single subtype is dragging the category down, so
+the SI-SNR miss is a genuine category-level characteristic of non-stationary noise, not a repeat of the
+v1 situation. Reported as a miss per Rule 33 — not re-parameterised to force a pass.
+
+Also newly visible from the per-subtype table, and disclosed rather than buried: **`stationary/engine`
+PESQ-WB is 2.4535, individually below the 2.5 target.** The `stationary` category passes (2.5385)
+because `vehicle` (2.6234) carries it. The category verdict is the committed metric, but the subtype
+split is now on the record.
+
+### Other work in this entry
+
+- `scripts/extract_esc50_subtype.py` (new) — parameterised ESC-50 class extractor, streams from the zip
+  instead of a 645 MB `extractall`. 5 self-tests.
+- `eval/make_compliance_report.py` (new) — **the compliance verdict is now computed from
+  `eval_raw.csv` by a command.** Previous `target_compliance.{json,md}` were assembled by hand, which
+  made the headline verdict unreproducible (uncomfortable against Rules 1 and 3). Counts PESQ
+  exclusions per cell rather than backfilling (Rules 24/26), and emits the per-subtype table. 5 self-tests.
+- Both registered in `scripts/run_all_selftests.py`.
+- Docs updated: `data/SOURCES.md` (section 6 + table + licence audit), `architecture.md` (tree +
+  changelog), `docs/non_stationary_root_cause.md` (Rule 27 correction note), `README.md`,
+  `docs/phase_4_summary.md`.
+- v1 artefacts preserved: `data/manifest_v1_crowd.csv`,
+  `results/v1_crowd/{eval_raw,results,target_compliance}.*`.
+
+### Self-test suite
+
+`python scripts/run_all_selftests.py --skip-dfn` -> **18 PASS + 6 SKIP** (4 `--skip-dfn`, 2 missing
+optional deps `fastapi`/`onnxruntime`). Zero regressions; 2 new tests added.
+
+### OPEN DEFECT — deliberately not fixed here
+
+**The clean speech pool uses 2 of the 40 speakers available in LibriSpeech `dev-clean`** (2035, 2277;
+verified against `data/downloads/dev-clean.tar.gz`). This limits speaker-generalisation claims for
+**every** category, not just non-stationary. It is left for a separate single-variable change because
+expanding it would move stationary and impulsive simultaneously — margins there are +0.0385 and +0.0428
+PESQ, thin enough to flip — and mixing it with the subtype swap would make neither interpretable.
+
+**Environment note:** `uv run` currently fails to resolve (`onnxruntime==1.20.1` has no cp39 wheel;
+pinned in `pyproject.toml` at commit `3152868`, predates this work). All commands above were run with
+`uv run --no-sync`, which uses the existing working venv. Not fixed here — flagged for whoever next
+touches dependencies.
+
+### Result
+
+**PASS.** Corpus v2 complete and fully evidenced. Compliance 6/9 -> 8/9, with the one remaining failure
+(`non_stationary` SI-SNR, 14.18 dB vs >15) reported as a miss, not tuned around.
+
+---
+
+## 2026-09-04 — Repository cleanup + `till_now.md` written
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev, no hardware)
+
+### What I did
+
+Wrote `till_now.md` — a full Phase 1-5 status document cross-checked against files that actually
+exist on disk (not from memory), replacing `summary/` as the canonical "where things stand" record.
+
+Then removed files identified as unnecessary, with the user's explicit go-ahead after reviewing a
+named list. Recommendation logic and full reasoning were given to the user before removal; summary:
+
+**Removed (git-tracked, `git rm`):**
+- `pi_deploy.zip` — stale deploy bundle, missing all of Phase 4 (`models/noise_classifier/`,
+  `models/dnsmos/`, `demo/webdash/`, and five Phase 2 `live/` modules). Regenerable via
+  `python scripts/deploy_to_pi.py`.
+- `summary/01_PROJECT_ACCOMPLISHMENTS.md`, `summary/02_NEXT_STEPS_PLAN.md`, `summary/README.md` —
+  superseded by `till_now.md`; the accomplishments doc's own headline PESQ number (2.5841) had
+  already been superseded twice by corrections this session and the one before.
+- `scripts/scratch_diagnose.py`, `scripts/investigate_pesq.py`, `scripts/test_fixed_nlms.py`,
+  `scripts/test_jit_nlms.py`, `scripts/test_noise_trace.py`, `scripts/investigate_nlms_alignment.py`,
+  `scripts/audit_snr.py` — one-off debugging scripts whose findings are already captured in
+  `progress.md`/`docs/`; verified none are imported by any remaining script before removal.
+
+**Removed (untracked, plain `rm`):**
+- `data/downloads/dev-clean.tar.gz` (323 MB), `data/downloads/esc50-master.zip` (616 MB) — raw
+  downloads redundant with the already-extracted `data/clean/` and `data/noise/*/` directories;
+  both sources are stable/fast to re-fetch (OpenSLR, GitHub) if ever needed again.
+- `results/test_enhanced/`, `results/test_selftest_input/`, `results/test_selftest_output/`,
+  `results/test_polyfill.wav`, `results/test_robust.wav` — self-test scratch output, regenerated
+  fresh on every run, referenced by no script between runs.
+
+**Deliberately kept, not removed:**
+- `data/downloads/gunshot_zenodo_7004819.zip` (1.5 GB) — the Zenodo download was previously blocked
+  by anti-bot rate-limiting and had to be fetched manually via browser (see `data/SOURCES.md` §5);
+  re-acquiring it is real risk, not just disk cost.
+- `data/noise/non_stationary/crowd/` (20 files) — kept for corpus-v1 reconstructability per
+  `docs/corpus_redefinition_v2.md` §5; small, and directly backs the corpus-redefinition audit trail
+  if ever questioned.
+
+### Verification
+
+Re-ran the full self-test suite after removal to confirm no dangling imports/regressions:
+
+    uv run --no-sync python scripts/run_all_selftests.py
+    ...
+    20 x [PASS], 3 x [SKIP] (export_onnx/onnx_infer/webdash/dnsmos -- correct, undeclared optional deps)
+    ALL MODE A SELF-TESTS PASSED
+
+Also grepped for any remaining reference to a deleted script before committing -- zero hits.
+
+### Result
+
+**PASS.** 11 tracked files removed via `git rm`, 7 untracked files/dirs removed directly (~950 MB
+reclaimed from `data/downloads/` alone), zero regressions, `till_now.md` added as the new canonical
+status document.

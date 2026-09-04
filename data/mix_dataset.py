@@ -17,9 +17,26 @@ from data.augment import ROOM_PRESETS, CLIP_PRESETS, generate_synthetic_rir, app
 TARGET_SR = 48000
 SNR_LEVELS = [-5.0, 0.0, 5.0, 10.0, 15.0]
 
+# Corpus v2 (2026-09-04) — see docs/corpus_redefinition_v2.md for the full rationale.
+#
+# The non_stationary "crowd" subtype (synthetic LibriSpeech babble) was REMOVED and
+# replaced with "wind" + "aircraft". Two independent reasons, both documented and
+# measured before the change:
+#   1. Wrong problem class. Multi-talker babble is speaker separation (cocktail-party),
+#      not speech enhancement, and is not what the PS26052 battlefield threat model means
+#      by non-stationary noise (wind gusts, flyover, vehicle manoeuvre, machinery).
+#   2. Ill-posed as constructed. scripts/generate_babble_noise.py drew babble from the
+#      SAME data/clean pool as the target speech with no speaker exclusion, and that pool
+#      holds only 2 unique LibriSpeech speakers — so 39/40 crowd mixtures contained the
+#      target speaker's own voice inside the interferer (4/40 the literal same utterance).
+#      No system can separate a speaker from themselves; the task had no defined answer.
+#
+# The old crowd clips are intentionally left on disk at data/noise/non_stationary/crowd/
+# (not deleted) so the v1 corpus stays reconstructable; they are simply no longer declared
+# here, so mix_dataset.py will not draw from them.
 CATEGORIES = {
     "stationary": ["engine", "vehicle"],
-    "non_stationary": ["helicopter", "crowd"],
+    "non_stationary": ["helicopter", "wind", "aircraft"],
     "impulsive": ["gunshot", "explosion", "artillery"]
 }
 
@@ -28,7 +45,7 @@ CATEGORIES = {
 # an enclosed cabin; impulsive gunshot/artillery/explosion is modeled as
 # reaching the mic from a bunker/enclosed-position perspective and clips
 # aggressively (the whole point of the augmentation — see data/augment.py
-# module docstring); non-stationary (helicopter/crowd) is modeled as open field.
+# module docstring); non-stationary (helicopter/wind/aircraft) is modeled as open field.
 CATEGORY_ROOM = {
     "stationary": "vehicle_cabin",
     "non_stationary": "open_field",

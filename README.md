@@ -2,7 +2,7 @@
 
 Smart India Hackathon 2026 — DRDO Problem Statement 26052 (PS26052).
 
-A single-channel speech enhancement system that suppresses defence-relevant acoustic noise — stationary engine/vehicle hum, non-stationary helicopter rotor and crowd noise, and impulsive gunshot/artillery transients — while preserving speech intelligibility. Designed for real-time operation on a Raspberry Pi 5 edge target, combining classical adaptive DSP baselines with a state-of-the-art deep learning enhancer (DeepFilterNet3) under one reproducible evaluation harness.
+A single-channel speech enhancement system that suppresses defence-relevant acoustic noise — stationary engine/vehicle hum, non-stationary helicopter rotor, wind gusts and aircraft flyover, and impulsive gunshot/artillery transients — while preserving speech intelligibility. Designed for real-time operation on a Raspberry Pi 5 edge target, combining classical adaptive DSP baselines with a state-of-the-art deep learning enhancer (DeepFilterNet3) under one reproducible evaluation harness.
 
 ## How it works
 
@@ -18,22 +18,26 @@ Every stage is driven by a single seeded manifest (`data/manifest.csv`), making 
 
 ## Results
 
-Evaluated on 300 synthetic mixtures (3 noise categories × 5 SNR levels from −5 to +15 dB × 20 seeds): 1500 condition–mixture pairs scored with PESQ-WB, STOI, SI-SNR, and ΔSI-SNR vs the noisy input. All 1500 evaluations valid, zero exclusions.
+Evaluated on 300 synthetic mixtures (3 noise categories × 5 SNR levels from −5 to +15 dB × 20 seeds), scored with PESQ-WB, STOI, SI-SNR, and ΔSI-SNR vs the noisy input across 6 conditions: 1800 condition–mixture pairs, all valid, zero exclusions.
+
+> **Corpus v2 (2026-09-04).** The `non_stationary` category was redefined: the synthetic `crowd` babble subtype was retired and replaced with `wind` + `aircraft`. It was found to be **ill-posed as constructed** — babble was drawn from the same 2-speaker pool as the target speech, so 39/40 crowd mixtures contained the target speaker's own voice inside the interferer. Full rationale, pre-registration, and the binding rules on describing the change: [docs/corpus_redefinition_v2.md](docs/corpus_redefinition_v2.md). **This changed the evaluation, not the system** — the enhancement pipeline is bit-identical across it. `stationary` and `impulsive` were byte-identical controls and reproduced to 4 decimal places.
 
 | Noise category | Best classical | DeepFilterNet (tuned, `atten_lim_db=30`) |
 |---|---|---|
 | Stationary (engine/vehicle) | +3.97 dB ΔSI-SNR · 0.90 STOI (NLMS) | **+11.07 dB ΔSI-SNR · 0.91 STOI · 2.54 PESQ-WB** |
-| Non-stationary (helicopter/crowd) | +2.86 dB ΔSI-SNR · 0.88 STOI (NLMS) | **+5.86 dB ΔSI-SNR · 0.83 STOI · 2.21 PESQ-WB** |
+| Non-stationary (helicopter/wind/aircraft) | +3.08 dB ΔSI-SNR · 0.89 STOI (NLMS) | **+9.17 dB ΔSI-SNR · 0.90 STOI · 2.54 PESQ-WB** |
 | Impulsive (gunshot/artillery) | +0.47 dB ΔSI-SNR · 0.83 STOI (Wiener) | **+10.24 dB ΔSI-SNR · 0.92 STOI · 2.54 PESQ-WB** |
 
 Two findings drive the design argument:
 
 - **Adaptive filters fail structurally on impulsive noise.** NLMS *loses* 3.3 dB of SI-SNR on real gunshot/artillery transients (Zenodo Record 7004819, CC BY 4.0) due to convergence lag — verified by zero-lag cross-correlation ablation to be inherent to gradient-based adaptation, not an alignment artifact. Under Phase 3's augmentation robustness test (reverb + mic clipping) NLMS collapses further still, losing 4+ dB in every category, while DeepFilterNet degrades far more gracefully (see [docs/augmentation_robustness.md](docs/augmentation_robustness.md)).
-- **Deep learning closes the gap.** DeepFilterNet maintains +10–11 dB improvement where classical methods collapse or stall. After Phase 3 tuning (`atten_lim_db=30`, see [progress.md](progress.md) 2026-09-04) it clears all three DRDO targets (SI-SNR > 15 dB, STOI > 0.85, **PESQ-WB > 2.5**) on **both** stationary and impulsive noise on the full SNR-averaged evaluation, not just at high input SNR.
+- **Deep learning closes the gap.** DeepFilterNet maintains +9–11 dB improvement where classical methods collapse or stall. After Phase 3 tuning (`atten_lim_db=30`, see [progress.md](progress.md) 2026-09-04) it clears the PESQ-WB > 2.5 and STOI > 0.85 DRDO targets in **all three** categories on the full SNR-averaged evaluation, not just at high input SNR.
 
-Non-stationary is the one open gap, and it's narrower than the category number suggests: it's driven almost entirely by crowd/babble (other human speech — a single-channel enhancer structurally can't separate target speech from background speech, the cocktail-party problem), while helicopter alone scores STOI 0.91 / +8.9 dB ΔSI-SNR, on par with the strongest categories. A dual-mic reference-assisted mitigation was tested with a realistically-degraded reference and does not rescue it either — the oracle-reference advantage inverts to strongly negative SI-SNR under realistic conditions. See [docs/non_stationary_root_cause.md](docs/non_stationary_root_cause.md) for the subtype-level breakdown and the dual-mic finding.
+**Compliance: 8 of 9 metric cells PASS.** The one remaining failure is **non-stationary SI-SNR at 14.18 dB against the > 15 dB target** — a 0.82 dB miss, reported as a miss rather than tuned around (Rule 33). It is uniform across all three non-stationary subtypes (aircraft 14.41, helicopter 14.29, wind 13.73 dB), so it is a genuine category-level characteristic rather than one subtype dragging the mean down. The verdict is generated by `python eval/make_compliance_report.py` directly from `results/eval_raw.csv`, not hand-assembled; it includes a per-subtype breakdown, because category means are exactly what concealed the v1 `crowd` defect. Full tables: [results/final/target_compliance.md](results/final/target_compliance.md); charts in `results/charts/`.
 
-**Compliance: 6 of 9 metric cells PASS** (stationary and impulsive clear all three targets; non-stationary remains the one structural, root-caused gap). Full per-method tables live in [docs/phase_4_summary.md](docs/phase_4_summary.md) and [results/final/target_compliance.md](results/final/target_compliance.md); charts in `results/charts/`.
+One honest caveat the per-subtype table surfaces: `stationary/engine` PESQ-WB is 2.4535, individually below target — the `stationary` category passes (2.5385) because `vehicle` (2.6234) carries it.
+
+**What was not solved.** Retiring `crowd` removed the cocktail-party scenario **from scope; it did not solve it.** A real crowd-babble case with disjoint speakers would still be hard for a single-channel enhancer, and a dual-mic reference-assisted mitigation was tested and does not rescue it either. See [docs/non_stationary_root_cause.md](docs/non_stationary_root_cause.md). A known open defect also remains: the clean speech pool uses 2 of the 40 speakers available in LibriSpeech `dev-clean`, which limits speaker-generalisation claims across every category.
 
 ## Getting started
 
@@ -97,7 +101,7 @@ uv run python models/deepfilternet/run_inference.py --input-dir results/demo_aud
 
 ## Dataset
 
-Clean speech comes from LibriSpeech dev-clean; noise subtypes (engine idle, vehicle, helicopter rotor, crowd babble, gunshot, artillery, explosion) are sourced and license-audited in [data/SOURCES.md](data/SOURCES.md). Mixtures are generated at controlled SNRs with per-mixture seeds recorded alongside achieved SNRs and normalization factors in [data/manifest.csv](data/manifest.csv). Audio files themselves are not stored in git — the manifest regenerates the exact dataset anywhere.
+Clean speech comes from LibriSpeech dev-clean; noise subtypes (engine idle, vehicle, helicopter rotor, wind, aircraft, gunshot, artillery, explosion) are sourced and license-audited in [data/SOURCES.md](data/SOURCES.md) — including §6 on why the `crowd` babble subtype was retired in corpus v2. Mixtures are generated at controlled SNRs with per-mixture seeds recorded alongside achieved SNRs and normalization factors in [data/manifest.csv](data/manifest.csv). Audio files themselves are not stored in git — the manifest regenerates the exact dataset anywhere.
 
 ## Repository layout
 
@@ -140,4 +144,4 @@ Post-Phase-5 additions, all off by default / non-invasive to the demo path unles
 - **Residual noise-suppression stage** (`live/residual_filter.py`, `pipeline.residual_filter: true`): reference-free adaptive filter after DeepFilterNet. Mechanically verified stable on the Pi (10-min stress, 0 dropouts); audio-quality impact not yet validated against the eval set, hence off by default.
 - **ONNX Runtime inference backend** (`models/deepfilternet/export_onnx.py`, `pipeline.inference_backend: onnx`): verified bit-exact vs PyTorch and ~42% faster on an x86_64 dev machine. **Not usable on this Pi's Python 3.13** — `onnx`'s `ml_dtypes` dependency requires `numpy≥2.1` there, which conflicts with `deepfilternet`'s `numpy<2.0` requirement; a hard upstream constraint, not a config issue. Optional dependencies for both of the above live in `requirements-optional.txt`, kept separate from `requirements.txt` so the core live pipeline's install can never be blocked by an optional feature.
 
-Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: after Phase 3 tuning (`atten_lim_db=30`), PESQ-WB still misses the >2.5 DRDO target on non-stationary (2.21) on the full SNR-averaged evaluation — stationary (2.54) and impulsive (2.54) both now pass; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.
+Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: after Phase 3 tuning (`atten_lim_db=30`) and the corpus v2 redefinition, PESQ-WB now clears the >2.5 DRDO target in all three categories (2.54 / 2.54 / 2.54), and the single remaining failure across the whole matrix is **non-stationary SI-SNR at 14.18 dB against >15 dB**; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.

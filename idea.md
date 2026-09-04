@@ -91,7 +91,17 @@ Compliance report: automated PASS/FAIL matrix against the three DRDO targets per
 
 On the 100% roadmap (P1 / P2 in project plan):
 
-Dual-microphone reference channel (next hardware step, ~₹3,000 additional BOM): a 2-in USB interface + second electret microphone gives the pipeline a primary + reference channel pair — the exact configuration PS26052 explicitly requires ("integrated with microphones (primary + reference)"). Enables true adaptive noise cancellation on the reference channel and closes our one open PESQ-WB gap by structurally addressing the cocktail-party problem on crowd/babble. Software is already wired for it (live/pipeline.py supports arbitrary independent input/output devices with independent sample rates); only the hardware and the reference-channel NLMS wiring remain.
+Dual-microphone reference channel (next hardware step, ~₹3,000 additional BOM): a 2-in USB interface + second electret microphone gives the pipeline a primary + reference channel pair — the exact configuration PS26052 explicitly requires ("integrated with microphones (primary + reference)"). Software is already wired for it (live/pipeline.py supports arbitrary independent input/output devices with independent sample rates); only the hardware and the reference-channel NLMS wiring remain.
+> **Update 2026-09-04:** this paragraph originally justified the dual-mic hardware step partly as
+> "closes our one open PESQ-WB gap... on crowd/babble." That framing is now outdated on two counts:
+> (1) the `crowd`/babble subtype was retired from the corpus entirely (found ill-posed as constructed,
+> not merely hard — see `docs/corpus_redefinition_v2.md`), so there is no crowd/babble gap left to
+> close; (2) the remaining open gap (non-stationary SI-SNR, 14.18 vs >15 dB target) is now uniform
+> across helicopter/wind/aircraft, not a crowd-specific artifact, and Phase 3 T6 already found a
+> dual-mic NLMS reference does not rescue non-stationary noise once the reference is realistically
+> degraded (see `docs/non_stationary_root_cause.md`). The dual-mic hardware step remains valuable for
+> the reasons PS26052 states explicitly (primary+reference mic requirement), just not as a fix for
+> this particular metric gap.
 Model fine-tuning on defence-specific corpora: DFN3 pretrained is where we start; the Rust libdfdata + HDF5 fine-tuning pipeline is scoped to close the PESQ-WB target on stationary and non-stationary categories.
 INT8 quantization for ARM-NEON: infrastructure exists (export_onnx.py --quantize); needs Pi-side speed validation + full PESQ/STOI re-run before adoption.
 Waveform-domain fallback model (Conv-TasNet class): for scenarios where phase-critical PESQ ceases to matter and raw SI-SNR maximization matters more (e.g. transcription downstream).
@@ -125,7 +135,7 @@ Edge compute (primary, delivered)	Raspberry Pi 5, 8 GB	Verified real-time (RTF 0
 Edge compute (optional portability)	Jetson AGX Orin / Qualcomm QCS8550 / defence-grade SoC	Same ONNX model, backend-swap only. Selected only if a specific deployment (higher-priority mission gear, existing Jetson fleet) demands it. Not required to meet PS26052 targets.
 Runtime	PyTorch (Pi) / ONNX Runtime (portable) / TensorRT (Jetson if used)	Backend-swap on the same exported graph
 Audio interface	2-in / 2-out USB (e.g. Behringer UMC202HD or generic 2-in USB-C adapter)	Enables PS-required primary + reference mic. Upgrade from current 1-in Generalplus.
-Reference microphone	Second electret/lavalier	~₹500–1,500. Enables true dual-channel ANC and closes the crowd/babble gap.
+Reference microphone	Second electret/lavalier	~₹500–1,500. Enables true dual-channel ANC and meets PS26052's stated primary+reference mic configuration. (Not a fix for the crowd/babble gap — that subtype was retired from the corpus as ill-posed, see 2026-09-04 update above; Phase 3 T6 also found a realistic dual-mic reference does not rescue non-stationary noise.)
 Enclosure	Active-cooled ruggedised case, IP-67 for field	Field durability; active cooler shipped as demo-day standard
 Power	5 V / 5 A USB-C PD, or 12 V DC vehicle bus	Standard Pi 5 supply; vehicle-bus adapter for mounted deployments
 4. Feasibility, Viability, Challenges & Mitigations

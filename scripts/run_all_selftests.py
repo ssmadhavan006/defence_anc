@@ -45,6 +45,9 @@ TESTS = [
     ("sweep_atten_lim",   [sys.executable, "scripts/sweep_atten_lim.py", "--self-test"], False, None),
     ("postproc_experiments", [sys.executable, "scripts/postproc_experiments.py", "--self-test"], False, None),
     ("simulate_reference_channel", [sys.executable, "scripts/simulate_reference_channel.py", "--self-test"], False, None),
+    # Corpus v2 (docs/corpus_redefinition_v2.md)
+    ("extract_esc50_subtype", [sys.executable, "scripts/extract_esc50_subtype.py", "--self-test"], False, None),
+    ("make_compliance_report", [sys.executable, "eval/make_compliance_report.py", "--self-test"], False, None),
     # Phase 2 (latency engineering) self-tests -- all Mode A, no hardware.
     ("latency_budget",    [sys.executable, "live/latency_budget.py"], False, None),
     ("pipeline_logic",    [sys.executable, "live/pipeline.py", "--self-test"], False, None),
