@@ -140,7 +140,7 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
             except Exception:
                 pass
     
-    clean_files = glob.glob(os.path.join(clean_dir, "*.flac")) + glob.glob(os.path.join(clean_dir, "*.wav"))
+    clean_files = sorted(glob.glob(os.path.join(clean_dir, "*.flac")) + glob.glob(os.path.join(clean_dir, "*.wav")))
     if not clean_files:
         raise FileNotFoundError(f"No clean speech files found in {clean_dir}")
         
@@ -153,7 +153,7 @@ def generate_dataset(clean_dir: str = "data/clean", noise_base_dir: str = "data/
         noise_pool[cat] = {}
         for sub in subtypes:
             sub_dir = os.path.join(noise_base_dir, cat, sub)
-            files = glob.glob(os.path.join(sub_dir, "**", "*.wav"), recursive=True) + glob.glob(os.path.join(sub_dir, "**", "*.flac"), recursive=True)
+            files = sorted(glob.glob(os.path.join(sub_dir, "**", "*.wav"), recursive=True) + glob.glob(os.path.join(sub_dir, "**", "*.flac"), recursive=True))
             if files:
                 noise_pool[cat][sub] = files
                 print(f"  [NOISE] Category '{cat}' / Subtype '{sub}': {len(files)} files")

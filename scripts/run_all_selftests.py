@@ -39,6 +39,18 @@ TESTS = [
     ("e2e_latency_logic", [sys.executable, "live/e2e_latency_test.py", "--self-test"], False, None),
     ("augment",           [sys.executable, "data/augment.py", "--self-test"], False, None),
     ("residual_filter",   [sys.executable, "live/residual_filter.py", "--self-test"], False, "numba"),
+    ("reference_nlms",   [sys.executable, "live/reference_nlms.py", "--self-test"], False, "numba"),
+    ("calibrate_mic_pair", [sys.executable, "live/calibrate_mic_pair.py", "--self-test"], False, None),
+    # Phase 3 (quality validation) self-tests -- all Mode A, no hardware.
+    ("sweep_atten_lim",   [sys.executable, "scripts/sweep_atten_lim.py", "--self-test"], False, None),
+    ("postproc_experiments", [sys.executable, "scripts/postproc_experiments.py", "--self-test"], False, None),
+    ("simulate_reference_channel", [sys.executable, "scripts/simulate_reference_channel.py", "--self-test"], False, None),
+    # Phase 2 (latency engineering) self-tests -- all Mode A, no hardware.
+    ("latency_budget",    [sys.executable, "live/latency_budget.py"], False, None),
+    ("pipeline_logic",    [sys.executable, "live/pipeline.py", "--self-test"], False, None),
+    ("cpu_affinity",      [sys.executable, "live/cpu_affinity.py", "--self-test"], False, None),
+    ("fast_resample",     [sys.executable, "live/fast_resample.py", "--self-test"], False, "numba"),
+    ("acoustic_latency_logic", [sys.executable, "live/acoustic_latency_test.py", "--self-test"], False, None),
     ("export_onnx",       [sys.executable, "models/deepfilternet/export_onnx.py", "--self-test"], True, "onnxscript"),
     ("onnx_infer",        [sys.executable, "models/deepfilternet/onnx_infer.py", "--self-test"], True, "onnxscript"),
 ]
