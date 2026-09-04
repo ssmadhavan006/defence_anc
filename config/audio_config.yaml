@@ -63,6 +63,15 @@ audio:
   input_device: 1   # USB Audio Device (headset mic)
   output_device: 0  # Jabra Speak 710 (speaker)
 
+  # Phase 5.1 (2026-09-04): pre-recorded WAV to play instead of the live mic
+  # if the demo microphone fails. null (default) = normal live-mic behaviour.
+  # Overridden by the --backup CLI flag when both are set. Build the default
+  # clip first: python demo/backup_playback.py --generate
+  # Output hardware (speakers/headset) is unaffected by this setting -- only
+  # the input side is replaced. See demo/backup_playback.py and
+  # live/pipeline.py's LivePipeline docstring.
+  backup_playback_path: null
+
   # ============================================================
   # Phase 1 — Dual-Mic Reference Channel (Topology B: dual USB)
   # ============================================================
@@ -251,6 +260,28 @@ pipeline:
     # Both are implemented and config-switchable so Phase 3 can measure
     # which is better.  Default: post_dfn.
     stage: "post_dfn"
+
+  # ============================================================
+  # Phase 5.3(b) — RTF Health Check (2026-09-04)
+  # ============================================================
+  # If per-chunk RTF stays above rtf_threshold for a full sustained_sec of
+  # real time (not chunk count -- see live/pipeline.py::_check_rtf_health),
+  # the system genuinely cannot keep up in real time and enhance-mode output
+  # is already glitching. auto_bypass then flips to bypass mode ONE-WAY (no
+  # auto-recovery -- avoids flapping mid-demo; restart the pipeline once the
+  # overload cause is fixed).
+  #
+  # This is deliberately a DIFFERENT default than dnsmos.auto_bypass below
+  # (which stays false): DNSMOS is a subjective, model-estimated quality
+  # score -- too noisy a signal to act on automatically. RTF is an
+  # objective, directly-measured real-time performance number; if it is
+  # genuinely sustained above threshold, continuing to attempt enhance mode
+  # is strictly worse than falling back to bypass.
+  health_check:
+    enabled: true
+    rtf_threshold: 0.9
+    sustained_sec: 5.0
+    auto_bypass: true
 
 # ============================================================
 # Phase 4 WOW #1 — Noise Classifier (models/noise_classifier/)

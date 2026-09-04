@@ -1682,3 +1682,164 @@ Also grepped for any remaining reference to a deleted script before committing -
 **PASS.** 11 tracked files removed via `git rm`, 7 untracked files/dirs removed directly (~950 MB
 reclaimed from `data/downloads/` alone), zero regressions, `till_now.md` added as the new canonical
 status document.
+
+---
+
+## 2026-09-04 — Phase 5.1-5.3 (demo bulletproofing, dev-machine work only)
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv, Git Bash)
+**Track:** A (dev, no hardware) — user explicitly scoped this to 5.1/5.2/5.3 only, 5.4/5.5 excluded.
+
+### 5.1 — Backup demo mode
+
+`demo/backup_playback.py` (new): `generate_backup_clip()` builds a 60s WAV from real corpus files
+(ESC-50 engine bed, two real Zenodo gunshot bursts, four real LibriSpeech utterances as a
+spoken-traffic stand-in — not TTS, not claimed as scripted command phraseology), mixed via
+`data.mix_dataset.mix_signals()` (the same function `results/eval_raw.csv` uses). `BackupAudioSource`
+feeds it into a `RingBuffer` at real-time cadence via a monotonic-clock-paced thread, using the same
+`write()` shape as `_input_callback`.
+
+`live/pipeline.py`: added `backup_audio_path` param + `--backup PATH` CLI flag. When set, `start()`
+never opens `sd.InputStream` (or the dual-mic reference stream, with a printed warning) — only
+`BackupAudioSource.start_feeding()` runs instead. The real output stream is untouched. Also added a
+`--backup` flag to `demo/webdash/app.py` for the same reason (judges use the web dashboard, not a
+bare terminal pipeline, so the flag needed to reach there too).
+
+Evidence:
+
+    uv run --no-sync python demo/backup_playback.py --self-test
+    ...
+    demo/backup_playback.py self-test -- ALL PASSED   (5/5)
+
+    uv run --no-sync python demo/backup_playback.py --generate
+    [backup_playback] Generated demo\backup_audio\backup_60s.wav
+      Duration        : 60.0s
+      Gunshot bursts  : ['2b06e2b2-...', 'ea3ba9e7-...'] at [0.25, 0.7]
+      Speech track    : ['2277-149874-0007.flac', '2277-149874-0002.flac', '2035-147961-0040.flac', '2035-147961-0024.flac']
+      Target/achieved SNR: -5.0 / -5.00 dB
+
+    uv run --no-sync python live/pipeline.py --self-test
+    ...  [PASS] test 10: LivePipeline constructor wires backup_audio_path and health_check config correctly
+
+### 5.2 — Rehearsed demo script
+
+**Architectural finding first (Rule 27):** `demo/dashboard.py`, `demo/spectrogram.py`, and
+`demo/webdash/app.py` each independently construct their own `LivePipeline` and call `.start()` —
+each opens a real, exclusive `sd.InputStream`/`OutputStream`. They cannot run as simultaneous
+separate OS processes against the same hardware (ALSA `hw:` devices don't allow more than one
+exclusive open) — the plan's literal "one command starts dashboard, web server, spectrogram,
+pipeline" would fail with a device-busy error the instant two of them opened the mic. Checked this
+against the actual code before writing the script, not assumed correct because the plan said so.
+
+`demo/run_judged_demo.sh` (new) therefore: runs `scripts/preflight_check.py` as a gate, refreshes
+the QR code (one-shot, no hardware conflict), then launches exactly one UI process that owns the
+pipeline (`--ui webdash|dashboard|spectrogram|pipeline`, default `webdash`). Idempotent via a PID
+file for the UI child process.
+
+**Real bug found and fixed during testing:** `--stop` issued during the `--auto-restart` wrapper's
+2-second cooldown gap between restarts found no live child process (it had already exited and been
+cleaned up) and silently no-op'd, leaving the restart loop running indefinitely. Fixed by adding a
+separate `supervisor.pid` file tracking the wrapping script's own PID, so `stop_previous()` can kill
+the supervisor itself, not just its last-known child.
+
+A second, environment-specific finding: a plain foreground `sleep 2` in the restart-cooldown loop
+did not reliably deliver SIGINT to the wrapping bash script on this Windows/Git-Bash/MSYS2 setup
+(most likely that environment's signal-emulation layer, not a portable bash bug — the exact same
+trap-plus-backgrounded-sleep-then-wait pattern is standard, well-tested practice on real Linux).
+Fixed regardless of root cause by backgrounding the cooldown sleep and waiting on it, which is the
+more portable pattern either way; final confirmation that this matters on Linux specifically is
+Pi-only.
+
+Evidence (all captured within single Bash-tool invocations, since this sandbox's shell state does
+not persist across separate tool calls — confirmed the hard way when an earlier cross-call test
+looked like a failure and was actually a tooling artifact, not a script bug):
+
+    bash -n demo/run_judged_demo.sh   -- syntax OK
+
+    -- auto-restart cooldown timing: 3 restarts logged over about 6s (2s cooldown, as designed)
+    grep -c "Restarting in 2s" ...   -> 3
+
+    -- stop mid-cooldown, after the supervisor-pid fix:
+    [run_judged_demo] Stopping previous auto-restart supervisor (pid=1186)...
+    [run_judged_demo] Stopped. Nothing else requested (--stop).
+    is original script (1186) still alive? -> gone (stopped cleanly, good)
+    restarts logged in the ~2s after stop (should not keep climbing) -> 2   (unchanged, confirms real stop)
+
+    -- idempotency: starting session 2 without stopping session 1 first
+    session2 log: "Stopping previous auto-restart supervisor (pid=1320)..."
+    is session 1 (1320) still alive? -> gone (good -- session 2 stopped it)
+
+`demo/ps26052-demo.service` (new): systemd unit template (Restart=on-failure, RestartSec=2) — the
+plan's explicitly-offered alternative to the while-loop wrapper. Not installed anywhere by this
+change; install steps documented in the file's own comments (Mode B, Pi-only).
+
+**Not measured:** the plan's "cold Pi boot to full demo in under 60s" claim. Everything above is
+logic/orchestration verification on the dev machine, not a Pi boot-to-demo stopwatch measurement.
+
+### 5.3 — Failure-recovery hardening
+
+**(a) Auto-restart:** covered above (both forms the plan offers).
+
+**(b) RTF health check:** `live/pipeline.py` gained `_check_rtf_health()` (pure function, mirrors
+`_classify_underrun`'s testing style) plus `_update_health_check()` wiring into `_inference_loop`.
+Tracks a rolling (timestamp, rtf) window; triggers only when every sample in the window exceeds
+`rtf_threshold` (default 0.9) AND the window's real-time span is >= `sustained_sec` (default 5.0) —
+explicitly time-based, not chunk-count-based, so it doesn't fire too early at a slow chunk rate or
+too late at a fast one. On trigger, if `auto_bypass` (default true), flips `self._mode` to
+`"bypass"` once, one-way (no auto-recovery — avoids flapping mid-demo).
+
+Deliberately a different default than `dnsmos.auto_bypass` (stays false, per its own existing
+comment: "an automatic mode flip mid-demo is a bigger risk than a low number on screen"). The
+distinction, documented in both the code and `config/audio_config.yaml`: DNSMOS is a subjective,
+model-estimated quality score — too noisy a signal to act on automatically. RTF is an objective,
+directly-measured real-time number; if it's genuinely sustained over threshold, enhance-mode output
+is already glitching, so bypass is strictly less risky than continuing to try.
+
+`config/audio_config.yaml` gained `audio.backup_playback_path` and `pipeline.health_check` (enabled,
+rtf_threshold, sustained_sec, auto_bypass), verified end to end against the real config file:
+
+    backup_audio_path=None, health_check_enabled=True, rtf_threshold=0.9, sustained_sec=5.0, auto_bypass=True
+
+5 new self-tests added to `live/pipeline.py --self-test` (tests 6-9 for the pure decision function,
+test 10 for the constructor wiring) — all pass, see below.
+
+**(c) Pre-flight check:** `scripts/preflight_check.py` (new) — checks config load, audio device
+enumeration, configured device index validity, DeepFilterNet model load plus a real silence-input
+`enhance_chunk()` call, backup-clip presence, and every optional dependency
+(fastapi/uvicorn/qrcode/onnxruntime/numba) as WARN-not-FAIL when absent (matching
+`scripts/run_all_selftests.py`'s existing SKIP-vs-FAIL convention for genuinely optional features),
+plus the full self-test suite. Red/green terminal output, exit code gates `run_judged_demo.sh`.
+
+Run for real against this dev machine (not just self-tested against synthetic data) — genuinely
+reports what's attached here:
+
+    uv run --no-sync python scripts/preflight_check.py --skip-selftests
+    [ PASS ] config loads
+    [ PASS ] audio devices enumerate
+    [ PASS ] configured device indices valid
+    [ PASS ] DeepFilterNet model loads + runs   (loaded and produced a valid output in ~0.1s)
+    [ PASS ] backup demo clip
+    [ WARN ] optional dep: fastapi (web dashboard, WOW #2)              -- not installed
+    [ WARN ] optional dep: uvicorn (web dashboard server, WOW #2)       -- not installed
+    [ WARN ] optional dep: qrcode (web dashboard QR code, WOW #2)       -- not installed
+    [ WARN ] optional dep: onnxruntime (DNSMOS quality monitor, WOW #3) -- not installed
+    [ PASS ] optional dep: numba (reference NLMS / residual filter / fast_resample)
+    READY -- safe to start the demo.
+
+### Full suite re-verification
+
+    uv run --no-sync python scripts/run_all_selftests.py
+    ...
+    22 x [PASS], 3 x [SKIP] (export_onnx/onnx_infer/webdash/dnsmos -- correct, undeclared optional deps)
+    ALL MODE A SELF-TESTS PASSED
+
+(was 20 PASS + 3 SKIP before this session's Phase 5 work; +2 for `backup_playback` and
+`preflight_check`, newly registered in `scripts/run_all_selftests.py`.)
+
+### Result
+
+**PASS** for the scope requested (5.1/5.2/5.3 only). One real orchestration bug found and fixed
+(supervisor-PID tracking for `--stop`). `till_now.md` and `architecture.md` updated. 5.4 (deck) and
+5.5 (video) were explicitly out of scope this pass and remain not started. Every hardware-dependent
+confirmation across all five phases remains Mode B, deferred to the Pi batch per the project's
+established dev-first, Pi-batched-at-the-end ordering.

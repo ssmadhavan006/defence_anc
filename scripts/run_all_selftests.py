@@ -63,6 +63,12 @@ TESTS = [
     ("noise_classifier",  [sys.executable, "models/noise_classifier/classify_chunk.py", "--self-test"], False, None),
     ("webdash",           [sys.executable, "demo/webdash/app.py", "--self-test"], False, "fastapi"),
     ("dnsmos",            [sys.executable, "models/dnsmos/dnsmos_infer.py", "--self-test"], False, "onnxruntime"),
+    # Phase 5 (demo bulletproofing) self-tests -- all Mode A, no hardware.
+    # backup_playback: builds a real (short) clip from the real corpus, so it
+    # needs data/clean + data/noise/{stationary/engine,impulsive/gunshot} on
+    # disk -- present on this dev machine, not declared optional.
+    ("backup_playback",   [sys.executable, "demo/backup_playback.py", "--self-test"], False, None),
+    ("preflight_check",   [sys.executable, "scripts/preflight_check.py", "--self-test"], False, None),
 ]
 
 

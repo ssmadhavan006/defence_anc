@@ -1,0 +1,34 @@
+[Unit]
+# Phase 5.3(a) — systemd alternative to run_judged_demo.sh's --auto-restart
+# while-loop mode. Either one satisfies the plan's "systemd unit OR
+# while-true wrapper" -- use this one if the Pi is set up with systemd
+# service management for the demo; use `run_judged_demo.sh --auto-restart`
+# if not, or for a quick rehearsal without installing a unit file.
+#
+# NOT installed or enabled by anything in this repo automatically -- copy
+# it in and enable it explicitly (commands below) as a deliberate step,
+# not a side effect of cloning the repo.
+Description=PS26052 judged demo (auto-restart on crash)
+After=network.target sound.target
+
+[Service]
+Type=simple
+# EDIT these two paths for the actual Pi deployment before installing:
+WorkingDirectory=/home/pi/defence_anc
+ExecStart=/home/pi/defence_anc/demo/run_judged_demo.sh
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/home/pi/defence_anc/.demo_run/systemd.log
+StandardError=append:/home/pi/defence_anc/.demo_run/systemd.log
+
+[Install]
+WantedBy=multi-user.target
+
+# Install / manage (Mode B — Pi only, not yet done, see till_now.md):
+#   sudo cp demo/ps26052-demo.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable ps26052-demo.service   # start on boot
+#   sudo systemctl start ps26052-demo.service
+#   sudo systemctl status ps26052-demo.service
+#   sudo journalctl -u ps26052-demo.service -f    # live logs
+#   sudo systemctl stop ps26052-demo.service

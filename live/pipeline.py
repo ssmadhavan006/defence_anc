@@ -112,6 +112,12 @@ def _load_config(config_path: str) -> dict:
             "residual_filter": False,
             "inference_backend": "pytorch",
             "onnx_dir": "results/onnx",
+            "health_check": {
+                "enabled": True,
+                "rtf_threshold": 0.9,
+                "sustained_sec": 5.0,
+                "auto_bypass": True,
+            },
         },
     }
     if not os.path.exists(config_path):
@@ -302,6 +308,31 @@ def _classify_underrun(is_running: bool, since_start_sec, grace_sec: float) -> s
     return "real"
 
 
+def _check_rtf_health(rtf_window, threshold: float, sustained_sec: float) -> bool:
+    """
+    Phase 5.3(b): pure decision function for the RTF health check, kept
+    independent of any threading/hardware so it's unit-testable exactly like
+    _classify_underrun() above.
+
+    rtf_window is an iterable of (timestamp_monotonic, rtf) pairs, oldest
+    first, already trimmed to some recent horizon by the caller. Returns True
+    (unhealthy -- should auto-bypass) only when EVERY sample in the window
+    exceeds `threshold` AND the window actually spans >= sustained_sec of
+    real time (not just >= sustained_sec worth of chunk *count*, which would
+    trigger too early on a slow chunk rate and too late on a fast one).
+
+    An empty or single-sample window is never considered unhealthy -- there
+    is no way to know a threshold has been *sustained* from one sample.
+    """
+    window = list(rtf_window)
+    if len(window) < 2:
+        return False
+    span_sec = window[-1][0] - window[0][0]
+    if span_sec < sustained_sec:
+        return False
+    return all(rtf > threshold for _, rtf in window)
+
+
 def _resolve_device(dev_spec, kind="input"):
     """
     Resolve an audio device specifier for sounddevice.
@@ -347,12 +378,24 @@ class LivePipeline:
         Parsed configuration dictionary (from audio_config.yaml).
     mode_override : str or None
         If set, overrides config["pipeline"]["mode"].
+    backup_audio_path : str or None
+        Phase 5.1. If set, the primary microphone's sd.InputStream is never
+        opened -- audio comes from this WAV file instead, fed at real-time
+        cadence via demo.backup_playback.BackupAudioSource. The output
+        stream (real speakers/headset) is unaffected, so a demo can recover
+        from a dead mic with this one flag while judges still hear the real
+        pipeline. Dual-mic reference capture is also skipped in this mode
+        (there is no live reference either) -- see start().
     """
 
-    def __init__(self, config: dict, mode_override: str = None):
+    def __init__(self, config: dict, mode_override: str = None, backup_audio_path: str = None):
         audio_cfg = config["audio"]
         model_cfg = config["model"]
         pipe_cfg = config["pipeline"]
+
+        self._backup_audio_path = backup_audio_path or audio_cfg.get("backup_playback_path", None)
+        self._backup_source = None
+        self._backup_thread = None
 
         self._sr = int(audio_cfg["sample_rate"])
         self._channels = int(audio_cfg["channels"])
@@ -468,6 +511,23 @@ class LivePipeline:
         self._stream_start_t = None
         self._inference_errors = 0
 
+        # Phase 5.3(b): RTF health check. Tracks a rolling window of
+        # (timestamp, rtf) so a sustained overload (not a single slow chunk)
+        # can trigger an automatic one-way switch to bypass mode -- unlike
+        # DNSMOS's auto_bypass (default OFF, see config/audio_config.yaml:
+        # a subjective quality score is too noisy a signal to act on
+        # automatically during a demo), RTF is an objective, deterministic
+        # measurement: if it's genuinely >0.9 sustained, the system cannot
+        # keep up in real time and enhance-mode output is already glitching,
+        # so bypass is strictly less risky than continuing to try.
+        health_cfg = pipe_cfg.get("health_check", {})
+        self._health_check_enabled = bool(health_cfg.get("enabled", True))
+        self._health_rtf_threshold = float(health_cfg.get("rtf_threshold", 0.9))
+        self._health_sustained_sec = float(health_cfg.get("sustained_sec", 5.0))
+        self._health_auto_bypass = bool(health_cfg.get("auto_bypass", True))
+        self._rtf_window = []  # list of (monotonic_ts, rtf), trimmed to _health_sustained_sec
+        self._health_auto_bypass_triggered = False
+
         # Last processed chunk, exposed for visual demos (e.g. demo/spectrogram.py).
         # Benign read/write race with the inference thread is acceptable here —
         # these are for display only, never used for audio-path decisions.
@@ -561,6 +621,38 @@ class LivePipeline:
     # Inference thread
     # ------------------------------------------------------------------
 
+    def _update_health_check(self, rtf: float):
+        """
+        Phase 5.3(b). Called once per processed chunk from _inference_loop
+        with that chunk's RTF. Maintains the rolling window and flips to
+        bypass mode (one-way -- does not auto-recover back to enhance, to
+        avoid flapping mid-demo) the first time _check_rtf_health() reports
+        a sustained overload. No-ops entirely if health_check.enabled=false.
+        """
+        if not self._health_check_enabled or self._health_auto_bypass_triggered:
+            return
+
+        now = time.monotonic()
+        self._rtf_window.append((now, rtf))
+        cutoff = now - self._health_sustained_sec
+        self._rtf_window = [(t, r) for t, r in self._rtf_window if t >= cutoff]
+
+        if _check_rtf_health(self._rtf_window, self._health_rtf_threshold, self._health_sustained_sec):
+            print(
+                f"[pipeline] [WARN] RTF > {self._health_rtf_threshold} sustained for "
+                f">= {self._health_sustained_sec}s -- system cannot keep up in real time.",
+                file=sys.stderr,
+            )
+            self._health_auto_bypass_triggered = True
+            if self._health_auto_bypass and self._mode == "enhance":
+                self._mode = "bypass"
+                print(
+                    "[pipeline] [WARN] Auto-switched to BYPASS mode to avoid audible failure "
+                    "(pipeline.health_check.auto_bypass). This does not auto-recover -- "
+                    "restart the pipeline once the overload cause is resolved.",
+                    file=sys.stderr,
+                )
+
     def _inference_loop(self):
         """
         Consumer thread: read chunks from in_buf, enhance, write to out_buf.
@@ -633,16 +725,18 @@ class LivePipeline:
                     enhanced = self._engine.bypass_chunk(mono)
                 elapsed = time.perf_counter() - t0
                 self._chunk_latencies.append(elapsed)
+                audio_dur = self._chunk_samples / self._sr
+                rtf = elapsed / audio_dur
 
                 if self._log_timing or elapsed > self._latency_warn_sec:
-                    audio_dur = self._chunk_samples / self._sr
-                    rtf = elapsed / audio_dur
                     level = "WARN" if elapsed > self._latency_warn_sec else "INFO"
                     print(
                         f"[pipeline] [{level}] chunk: {elapsed*1000:.2f} ms "
                         f"(audio={audio_dur*1000:.0f} ms, RTF={rtf:.4f})",
                         file=sys.stderr,
                     )
+
+                self._update_health_check(rtf)
 
                 # enhanced shape: (1, n_out) — write back as (n_out, 1) for ring buffer.
                 out_mono = enhanced[0]   # shape (n_out,)
@@ -757,42 +851,90 @@ class LivePipeline:
         )
         self._inference_thread.start()
 
-        # Resolve devices — prevents PortAudioError(-1) when config is null
-        in_dev = _resolve_device(self._in_device, kind="input")
+        # Resolve output device unconditionally — real speakers/headset are
+        # used in both normal and backup mode, per Phase 5.1: judges must
+        # still hear the actual pipeline output when the mic fails.
         out_dev = _resolve_device(self._out_device, kind="output")
-
-        # Resolve each stream's actual hardware rate independently — input
-        # and output are commonly different physical devices (e.g. a
-        # headset mic for input, a speaker for output) with different
-        # native sample rates, neither of which need equal self._sr.
-        self._in_stream_sr = _resolve_stream_samplerate(
-            in_dev, self._sr, self._channels, kind="input"
-        )
         self._out_stream_sr = _resolve_stream_samplerate(
             out_dev, self._sr, self._channels, kind="output"
         )
-        self._in_blocksize = int(round(self._in_stream_sr * self._chunk_sec))
         self._out_blocksize = int(round(self._out_stream_sr * self._chunk_sec))
 
-        print(
-            f"[pipeline] Opening streams "
-            f"(input_device={in_dev!r} @ {self._in_stream_sr} Hz, "
-            f"output_device={out_dev!r} @ {self._out_stream_sr} Hz, "
-            f"processing @ {self._sr} Hz)...",
-            file=sys.stderr,
-        )
+        if self._backup_audio_path:
+            # Phase 5.1: backup demo mode. No sd.InputStream is opened at
+            # all -- audio is fed from a WAV file at real-time cadence
+            # instead. Dual-mic reference capture is skipped too (there is
+            # no live reference mic in this mode either); reference_nlms
+            # would otherwise silently see a stale/empty reference buffer.
+            print(
+                f"[pipeline] *** BACKUP AUDIO MODE ACTIVE *** — source={self._backup_audio_path!r}. "
+                f"No live microphone is in use; this is pre-recorded audio.",
+                file=sys.stderr,
+            )
+            if self._dual_mic_enabled:
+                print(
+                    "[pipeline] WARNING: dual_mic.enabled is true but backup mode has no live "
+                    "reference mic either — reference_nlms will not run this session.",
+                    file=sys.stderr,
+                )
+            from demo.backup_playback import BackupAudioSource
+            self._backup_source = BackupAudioSource(
+                self._backup_audio_path, sample_rate=self._sr, channels=self._channels, loop=True
+            )
+            print(
+                f"[pipeline] Backup clip duration: {self._backup_source.duration_sec:.1f}s (loops).",
+                file=sys.stderr,
+            )
+            self._in_stream_sr = self._sr  # file is pre-resampled by BackupAudioSource
+        else:
+            # Normal mode — resolve and open the real input device.
+            in_dev = _resolve_device(self._in_device, kind="input")
+            self._in_stream_sr = _resolve_stream_samplerate(
+                in_dev, self._sr, self._channels, kind="input"
+            )
+            self._in_blocksize = int(round(self._in_stream_sr * self._chunk_sec))
 
-        # Open input stream.
-        self._stream_in = sd.InputStream(
-            samplerate=self._in_stream_sr,
-            blocksize=self._in_blocksize,
-            device=in_dev,
-            channels=self._channels,
-            dtype="float32",
-            callback=self._input_callback,
-            latency="low",
-        )
-        # Open output stream.
+            print(
+                f"[pipeline] Opening streams "
+                f"(input_device={in_dev!r} @ {self._in_stream_sr} Hz, "
+                f"output_device={out_dev!r} @ {self._out_stream_sr} Hz, "
+                f"processing @ {self._sr} Hz)...",
+                file=sys.stderr,
+            )
+            self._stream_in = sd.InputStream(
+                samplerate=self._in_stream_sr,
+                blocksize=self._in_blocksize,
+                device=in_dev,
+                channels=self._channels,
+                dtype="float32",
+                callback=self._input_callback,
+                latency="low",
+            )
+
+            # Open reference mic stream (Phase 1 — only when dual_mic is enabled).
+            if self._dual_mic_enabled and self._ref_device is not None:
+                ref_dev = _resolve_device(self._ref_device, kind="input")
+                self._ref_stream_sr = _resolve_stream_samplerate(
+                    ref_dev, self._sr, 1, kind="input"
+                )
+                ref_blocksize = int(round(self._ref_stream_sr * self._chunk_sec))
+                print(
+                    f"[pipeline] Opening reference stream "
+                    f"(device={ref_dev!r} @ {self._ref_stream_sr} Hz, "
+                    f"delay={self._ref_delay_samples} samples)...",
+                    file=sys.stderr,
+                )
+                self._stream_ref = sd.InputStream(
+                    samplerate=self._ref_stream_sr,
+                    blocksize=ref_blocksize,
+                    device=ref_dev,
+                    channels=1,
+                    dtype="float32",
+                    callback=self._ref_callback,
+                    latency="low",
+                )
+
+        # Open output stream (real hardware, both modes).
         self._stream_out = sd.OutputStream(
             samplerate=self._out_stream_sr,
             blocksize=self._out_blocksize,
@@ -803,33 +945,15 @@ class LivePipeline:
             latency="low",
         )
 
-        # Open reference mic stream (Phase 1 — only when dual_mic is enabled).
-        if self._dual_mic_enabled and self._ref_device is not None:
-            ref_dev = _resolve_device(self._ref_device, kind="input")
-            self._ref_stream_sr = _resolve_stream_samplerate(
-                ref_dev, self._sr, 1, kind="input"
-            )
-            ref_blocksize = int(round(self._ref_stream_sr * self._chunk_sec))
-            print(
-                f"[pipeline] Opening reference stream "
-                f"(device={ref_dev!r} @ {self._ref_stream_sr} Hz, "
-                f"delay={self._ref_delay_samples} samples)...",
-                file=sys.stderr,
-            )
-            self._stream_ref = sd.InputStream(
-                samplerate=self._ref_stream_sr,
-                blocksize=ref_blocksize,
-                device=ref_dev,
-                channels=1,
-                dtype="float32",
-                callback=self._ref_callback,
-                latency="low",
-            )
-
-        self._stream_in.start()
+        if self._stream_in is not None:
+            self._stream_in.start()
         self._stream_out.start()
         if self._stream_ref is not None:
             self._stream_ref.start()
+        if self._backup_source is not None:
+            self._backup_thread = self._backup_source.start_feeding(
+                self._in_buf, self._running, self._chunk_sec
+            )
 
         # Phase 2 (D2): marks t=0 for the startup-underrun grace window in
         # _output_callback / _classify_underrun. Recorded right after the
@@ -877,6 +1001,13 @@ class LivePipeline:
         if self._inference_thread is not None:
             self._inference_thread.join(timeout=3.0)
 
+        if self._backup_thread is not None:
+            # Daemon thread already exits on its own once _running is
+            # cleared (checked once per chunk_sec in its feed loop) -- this
+            # join is just to avoid a race where _print_stats() below prints
+            # while the thread is still mid-iteration.
+            self._backup_thread.join(timeout=self._chunk_sec * 3)
+
         self._print_stats()
 
     def _print_stats(self):
@@ -897,6 +1028,15 @@ class LivePipeline:
                 f"  ref_delay_samples: {self._ref_delay_samples}\n"
                 + nlms_line
             )
+        backup_line = (
+            f"\n  Backup audio mode: ACTIVE (source={self._backup_audio_path})"
+            if self._backup_audio_path else ""
+        )
+        health_line = (
+            f"\n  RTF health check: AUTO-BYPASS TRIGGERED "
+            f"(RTF > {self._health_rtf_threshold} sustained >= {self._health_sustained_sec}s)"
+            if self._health_auto_bypass_triggered else ""
+        )
         print(
             f"\n[pipeline] === Session stats ({len(lats)} chunks) ===\n"
             f"  Latency: median={np.median(lats):.2f} ms, "
@@ -909,7 +1049,7 @@ class LivePipeline:
             f"  (+{self._startup_underruns} during startup grace window, "
             f"+{self._teardown_underruns} during shutdown drain -- neither is a failure)\n"
             f"  Inference errors: {self._inference_errors}"
-            + dual_mic_line,
+            + dual_mic_line + backup_line + health_line,
             file=sys.stderr,
         )
 
@@ -982,6 +1122,42 @@ def _self_test():
     print("  [PASS] test 5: running underruns classify as startup within the grace window, "
           "real once past it (verdict is unaffected by in-window ones, fails on out-of-window ones)")
 
+    # --- Test 6: RTF health check (Phase 5.3b) -- empty/short windows never trigger ---
+    assert _check_rtf_health([], threshold=0.9, sustained_sec=5.0) is False
+    assert _check_rtf_health([(0.0, 0.95)], threshold=0.9, sustained_sec=5.0) is False
+    print("  [PASS] test 6: empty or single-sample RTF windows never trigger auto-bypass")
+
+    # --- Test 7: sustained overload (span >= sustained_sec, every sample over threshold) triggers ---
+    window = [(t, 0.95) for t in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+    assert _check_rtf_health(window, threshold=0.9, sustained_sec=5.0) is True
+    print("  [PASS] test 7: 6 samples over 5.0s span, all RTF=0.95 > 0.9 -> triggers")
+
+    # --- Test 8: one healthy sample in the window blocks the trigger ---
+    window = [(0.0, 0.95), (1.0, 0.95), (2.0, 0.5), (3.0, 0.95), (4.0, 0.95), (5.0, 0.95)]
+    assert _check_rtf_health(window, threshold=0.9, sustained_sec=5.0) is False
+    print("  [PASS] test 8: a single healthy sample (RTF=0.5) inside the window blocks the trigger")
+
+    # --- Test 9: all samples over threshold but window doesn't span sustained_sec yet ---
+    window = [(t, 0.95) for t in [0.0, 0.5, 1.0, 1.5, 2.0]]   # only 2.0s span
+    assert _check_rtf_health(window, threshold=0.9, sustained_sec=5.0) is False
+    print("  [PASS] test 9: RTF over threshold but window spans only 2.0s < 5.0s -> does not trigger yet")
+
+    # --- Test 10: LivePipeline wiring for backup_audio_path / health_check config
+    # (constructor only -- does not touch sounddevice, safe for Mode A) ---
+    minimal_cfg = {
+        "audio": {"sample_rate": 48000, "channels": 1, "chunk_duration_sec": 0.1,
+                   "ring_buffer_duration_sec": 2.0, "input_device": None, "output_device": None},
+        "model": {"atten_lim_db": 30.0, "output_gain": 1.0},
+        "pipeline": {"mode": "enhance", "health_check": {"enabled": True, "rtf_threshold": 0.8,
+                                                           "sustained_sec": 3.0, "auto_bypass": True}},
+    }
+    p = LivePipeline(minimal_cfg, backup_audio_path="demo/backup_audio/backup_60s.wav")
+    assert p._backup_audio_path == "demo/backup_audio/backup_60s.wav"
+    assert p._health_rtf_threshold == 0.8 and p._health_sustained_sec == 3.0
+    assert p._health_auto_bypass is True and p._health_auto_bypass_triggered is False
+    print("  [PASS] test 10: LivePipeline constructor wires backup_audio_path and "
+          "health_check config correctly (no hardware touched)")
+
     print("live/pipeline.py self-test -- ALL PASSED")
 
 
@@ -1011,6 +1187,15 @@ def _main():
         help="Log per-chunk inference timing to stderr",
     )
     parser.add_argument(
+        "--backup",
+        default=None,
+        metavar="WAV_PATH",
+        help="Phase 5.1: play this WAV file instead of the live microphone "
+             "(e.g. demo/backup_audio/backup_60s.wav, built via "
+             "'python demo/backup_playback.py --generate'). Real output "
+             "hardware is still used -- only the input side is replaced.",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run Mode A self-test (priming/underrun logic, no hardware) and exit",
@@ -1029,7 +1214,7 @@ def _main():
     if args.log_timing:
         config["pipeline"]["log_timing"] = True
 
-    pipeline = LivePipeline(config, mode_override=args.mode)
+    pipeline = LivePipeline(config, mode_override=args.mode, backup_audio_path=args.backup)
     pipeline.run_blocking()
 
 

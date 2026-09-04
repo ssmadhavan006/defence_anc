@@ -9,9 +9,11 @@ what is **built but not yet hardware-validated**, per Rule 29 (no Mode B test is
 from code review alone). Every number below traces to `progress.md`, `results/`, or a file that
 still exists in the repo — nothing here is asserted from memory.
 
-**One-line status:** all four dev-machine (Mode A) phases are built, self-tested, and produce a
+**One-line status:** all dev-machine (Mode A) work across Phases 1-4 plus Phase 5's 5.1-5.3 (backup
+mode, rehearsed demo script, failure-recovery hardening) is built and self-tested, producing a
 compliance verdict of **8 of 9 metric cells PASS**. Every hardware-dependent (Mode B) item across
-all four phases, plus the entirety of Phase 5, remains outstanding.
+all five phases remains outstanding, plus Phase 5.4/5.5 (deck, video) which are dev-buildable but
+not yet started.
 
 ---
 
@@ -204,23 +206,98 @@ web dashboard, on-device DNSMOS quality self-monitoring.
 **Plan's objective:** make demo-day failures (WiFi flooding, USB re-enumeration, someone unplugging
 something) into non-events.
 
-### Status: not started
+### Scope note
 
-Checked directly against the file system — none of these exist:
-- `demo/backup_playback.py` (pre-recorded audio fallback if live mic fails)
-- `demo/run_judged_demo.sh` (one-command cold-boot-to-demo script)
-- `scripts/preflight_check.py` (pre-demo device/model/self-test verification)
-- Auto-restart wrapper for pipeline crashes
-- RTF>0.9-for-5s auto-bypass health check
-- Presentation deck (10–12 slides)
-- Backup demo video
-- Before/after audio A/B pair for judges to listen to
-- Dress rehearsal
+Only sections 5.1–5.3 were built this pass (backup mode, rehearsed demo script, failure-recovery
+hardening), per explicit instruction. 5.4 (presentation deck) and 5.5 (backup demo video) are
+**not** part of this update and remain not started — see "Not done" below.
 
-This phase needs the least new *engineering* (most of it is scripting + rehearsal, not research)
-but has zero coverage right now, and is explicitly "waiting on user" per `progress.md` since Phase
-4 closeout — nothing here is hardware-blocked in the way Phases 1/2/4's Track B items are; most of
-it is buildable on the dev machine today.
+### Done (dev machine, Mode A)
+
+**5.1 — Backup demo mode.**
+- `demo/backup_playback.py` (new) — `generate_backup_clip()` builds a 60-second WAV from the
+  project's own real corpus: a real ESC-50 engine noise bed, two real Zenodo gunshot bursts, and
+  four real LibriSpeech utterances (concatenated with silence gaps) standing in for spoken radio
+  traffic — mixed via `data.mix_dataset.mix_signals()`, the exact function the real 300-mixture
+  eval numbers come from, at a fixed SNR (-5 dB). Not synthesized text-to-speech, and not claimed
+  to be scripted military command phraseology — it's honestly real recorded human speech.
+  Generated once: `demo/backup_audio/backup_60s.wav` (+ `_clean_ref.wav`), gitignored like all
+  other project audio, regenerable via `python demo/backup_playback.py --generate`.
+- `BackupAudioSource` class feeds the clip into the pipeline's existing input ring buffer at
+  real-time cadence via a monotonic-clock-paced thread, using the identical `write()` call shape
+  `_input_callback()` uses for a real microphone — the inference thread and output hardware don't
+  know the difference.
+- `live/pipeline.py`: when `--backup <path>` is passed, `sd.InputStream` (and the dual-mic
+  reference stream, with a printed warning) is never opened at all — only the input side is
+  replaced. The **output stream stays real**, so judges hear it through actual demo hardware, and
+  a loud `*** BACKUP AUDIO MODE ACTIVE ***` banner makes it impossible to run silently.
+  `demo/webdash/app.py` got the same `--backup` flag for consistency (small, additive; judges use
+  the web dashboard, not a bare terminal pipeline, so the flag needed to reach there too).
+- 5 self-tests pass (clip generation from real corpus, exact non-looping chunk count, looping
+  wraparound never returns None, `--generate` idempotency, resampling correctness).
+
+**5.2 — Rehearsed demo script.**
+- `demo/run_judged_demo.sh` (new) — **one real architectural finding first:** `demo/dashboard.py`,
+  `demo/spectrogram.py`, and `demo/webdash/app.py` each independently construct their own
+  `LivePipeline` and call `.start()`, opening real, exclusive `sd.InputStream`/`OutputStream`
+  handles. They **cannot** run as simultaneous separate processes against the same hardware — the
+  plan's literal "one command starts dashboard, web server, spectrogram, pipeline" would fail with
+  a device-busy error the instant two of them opened the mic (Rule 27: checked against the actual
+  implementation before building around it, not assumed correct because the plan said so). The
+  script instead runs preflight checks, refreshes the QR code (one-shot, no conflict), then
+  launches **exactly one** UI process that owns the pipeline — default `webdash` (the
+  judge-interactive one), switchable via `--ui dashboard|spectrogram|pipeline`.
+- Idempotent via a tracked PID file plus a **separate supervisor PID file** for the auto-restart
+  wrapper — a real bug was found and fixed during testing: `--stop` issued during the 2-second
+  cooldown *between* restarts found no live child process and silently no-op'd, leaving the
+  restart loop running. Fixed by tracking the wrapping script's own PID, not just the last child's.
+  Verified: starting a second session without stopping the first correctly supersedes it; `--stop`
+  issued mid-cooldown now correctly terminates the whole session (evidence in `progress.md`).
+- `demo/ps26052-demo.service` (new) — systemd unit template (`Restart=on-failure`,
+  `RestartSec=2`), the alternative the plan explicitly allows ("systemd unit OR while-true
+  wrapper") for Pi deployments that prefer systemd-managed restart over the script's own
+  `--auto-restart` loop.
+- **Not measured:** the plan's "cold Pi boot to full demo in under 60s" timing. The script's logic
+  (idempotency, cleanup, argument handling, the auto-restart loop, a real launch/failure/cleanup
+  cycle) was exercised on the dev machine (Windows/Git Bash) with pasted evidence in `progress.md`;
+  wall-clock timing on a real Pi boot has not been measured — that's Mode B.
+
+**5.3 — Failure-recovery hardening.**
+- **(a) Auto-restart:** both forms the plan offers — `run_judged_demo.sh --auto-restart` (portable
+  while-loop, 2s cooldown) and `demo/ps26052-demo.service` (systemd, `RestartSec=2`).
+- **(b) RTF health check:** `live/pipeline.py` now tracks a rolling window of (timestamp, RTF) per
+  chunk. If RTF stays above `0.9` for a full `5.0` seconds of *real time* (not chunk count —
+  `_check_rtf_health()` explicitly checks the window's time span, not its length), it logs a
+  warning and — if `pipeline.health_check.auto_bypass` (default `true`) — switches to bypass mode
+  **once, one-way** (no auto-recovery, to avoid flapping mid-demo). This is a deliberately
+  *different* default than `dnsmos.auto_bypass` (stays `false`): DNSMOS is a subjective,
+  model-estimated quality score, too noisy to act on automatically; RTF is an objective, directly
+  measured real-time number — if it's genuinely sustained over threshold, the system's enhance-mode
+  output is already glitching, so bypass is strictly less risky. 5 new self-tests cover the pure
+  decision logic (empty/short windows, sustained-over-threshold, one healthy sample blocking the
+  trigger, threshold-met-but-span-too-short) plus one verifying the config wiring end to end.
+- **(c) Pre-flight check:** `scripts/preflight_check.py` (new) — checks config load, audio device
+  enumeration, configured device indices, DeepFilterNet model load + a real silence-input inference
+  call, presence of the backup clip, every optional dependency (fastapi/uvicorn/qrcode/onnxruntime/
+  numba, each reported WARN not FAIL when absent — matching `run_all_selftests.py`'s existing
+  SKIP-vs-FAIL convention), and the full self-test suite. Red/green terminal output, non-zero exit
+  on any CRITICAL failure, composes into `run_judged_demo.sh` as a gate. **Run for real on this dev
+  machine** (not just self-tested) — genuinely reports what's attached to *this* machine (no
+  dual-mic hardware here), which is the honest, correct behavior: a preflight check that fabricates
+  PASS for absent hardware would be worse than useless. 5 self-tests pass.
+
+Full self-test suite after all Phase 5 additions: **22 PASS + 3 correct SKIP**, zero regressions
+(`backup_playback` and `preflight_check` newly registered in `scripts/run_all_selftests.py`).
+
+### Not done
+- **5.4 Presentation deck** and **5.5 backup demo video** — out of scope for this pass, not started.
+- Before/after audio A/B pair for judges (5.5) — not started.
+- Full dress rehearsal — needs the Pi, Mode B.
+- The auto-restart wrapper's crash-recovery and the health-check's auto-bypass have both been
+  logic-verified (synthetic inputs, a real induced failure in the case of the wrapper), but neither
+  has been exercised against a genuine mid-demo pipeline crash or a genuine sustained-overload
+  condition on real hardware — that confirmation is Pi-only.
+- Cold-boot-to-demo timing (<60s) — not measured, Mode B (see 5.2 above).
 
 ---
 
@@ -243,13 +320,16 @@ it is buildable on the dev machine today.
 | Judge phone toggle | ✅ Built, not tested |
 | DNSMOS live quality score | ✅ Built, Pi timing unverified |
 | Auto-degraded-quality warning path | ⚠️ Built (`auto_bypass` flag exists), untested |
-| Backup playback mode | ❌ Not started |
-| Backup demo video | ❌ Not started |
-| Pre-flight check script | ❌ Not started |
-| Cold-boot-to-demo <60s | ❌ Not started |
-| Full dress rehearsal | ❌ Not started |
+| Backup playback mode | ✅ Built (`demo/backup_playback.py`), dev-verified, real hardware not exercised |
+| Rehearsed demo script | ✅ Built (`demo/run_judged_demo.sh`), dev-verified, timing not measured |
+| Auto-restart wrapper | ✅ Built (script + systemd unit), dev-verified against a real induced failure |
+| RTF health check + auto-bypass | ✅ Built, logic-verified, not exercised on a real sustained overload |
+| Pre-flight check script | ✅ Built (`scripts/preflight_check.py`), run for real on dev machine |
+| Backup demo video | ❌ Not started (5.5, out of this pass's scope) |
+| Cold-boot-to-demo <60s | ❌ Not measured — Mode B |
+| Full dress rehearsal | ❌ Not started — Mode B |
 | README/architecture.md updated | ✅ Current through this document |
-| Presentation deck | ❌ Not started |
+| Presentation deck | ❌ Not started (5.4, out of this pass's scope) |
 
 ---
 
@@ -257,11 +337,13 @@ it is buildable on the dev machine today.
 
 1. **Pi hardware batch** (per your own stated ordering — batch everything hardware-dependent to the
    end). Covers: Phase 1 dual-mic physical setup + validation, Phase 2 real latency measurement,
-   Phase 4 Pi-side WOW validation. This is the largest remaining block of *validation* work (not new
-   engineering — the code already exists and is self-tested).
-2. **Phase 5**, which needs no hardware for most of its scope and could be built now: backup
-   playback script, `run_judged_demo.sh`, preflight check script, auto-restart wrapper. The deck and
-   video are the only genuinely time-consuming items and don't block anything else.
+   Phase 4 Pi-side WOW validation, and now also Phase 5's Mode B items (cold-boot timing, a real
+   induced pipeline crash against the auto-restart wrapper, a real sustained-overload condition
+   against the RTF health check, full dress rehearsal). This is the largest remaining block of
+   *validation* work (not new engineering — the code already exists and is self-tested).
+2. **Phase 5.4/5.5** — presentation deck (10-12 slides) and backup demo video. Deliberately out of
+   scope for this pass (only 5.1-5.3 were requested); the only genuinely time-consuming items left
+   in Phase 5, and they don't block anything else.
 3. **Optional, not gating:** closing the remaining 0.82dB non-stationary SI-SNR gap (not yet
    attempted — Phase 3's atten sweep optimized for PESQ, not SI-SNR specifically, so there may be
    room here) and the open clean-speech-pool speaker-diversity defect (2 of 40 speakers).

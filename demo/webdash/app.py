@@ -17,6 +17,7 @@ Bind: 0.0.0.0:8080 (override via --host / --port or config).
 Usage:
     python demo/webdash/app.py --help
     python demo/webdash/app.py --self-test  (no audio hardware needed)
+    python demo/webdash/app.py --backup demo/backup_audio/backup_60s.wav  (Phase 5.1)
 """
 
 import argparse
@@ -346,6 +347,13 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--backup",
+        default=None,
+        metavar="WAV_PATH",
+        help="Phase 5.1: play this WAV file instead of the live microphone "
+             "(see demo/backup_playback.py). Real output hardware is still used.",
+    )
     args = parser.parse_args()
 
     if args.self_test:
@@ -362,7 +370,7 @@ def main():
     from live.pipeline import LivePipeline, _load_config
     cfg = _load_config("config/audio_config.yaml")
 
-    pipeline = LivePipeline(cfg)
+    pipeline = LivePipeline(cfg, backup_audio_path=args.backup)
     pipeline.start()
 
     app = make_app(
