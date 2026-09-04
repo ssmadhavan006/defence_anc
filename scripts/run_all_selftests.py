@@ -53,6 +53,13 @@ TESTS = [
     ("acoustic_latency_logic", [sys.executable, "live/acoustic_latency_test.py", "--self-test"], False, None),
     ("export_onnx",       [sys.executable, "models/deepfilternet/export_onnx.py", "--self-test"], True, "onnxscript"),
     ("onnx_infer",        [sys.executable, "models/deepfilternet/onnx_infer.py", "--self-test"], True, "onnxscript"),
+    # Phase 4 (WOW factors) self-tests -- all Mode A, no hardware.
+    # noise_classifier: torch present, no trained model needed (tests logic + grouped-split guard).
+    # webdash: skips if fastapi not installed; uses mock pipeline (no audio hardware).
+    # dnsmos: skips if onnxruntime not installed OR model file absent (see download_model.py).
+    ("noise_classifier",  [sys.executable, "models/noise_classifier/classify_chunk.py", "--self-test"], False, None),
+    ("webdash",           [sys.executable, "demo/webdash/app.py", "--self-test"], False, "fastapi"),
+    ("dnsmos",            [sys.executable, "models/dnsmos/dnsmos_infer.py", "--self-test"], False, "onnxruntime"),
 ]
 
 

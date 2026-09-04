@@ -251,3 +251,72 @@ pipeline:
     # Both are implemented and config-switchable so Phase 3 can measure
     # which is better.  Default: post_dfn.
     stage: "post_dfn"
+
+# ============================================================
+# Phase 4 WOW #1 — Noise Classifier (models/noise_classifier/)
+# ============================================================
+# 3-class (stationary / non_stationary / impulsive) log-mel CNN.
+# Display-only: category + confidence shown on dashboard and webdash.
+# Does NOT route attenuation (T1 found uniform NLMS penalty across all
+# categories — no evidence-backed routing policy exists, D1-A applies).
+# Default false: no model load, no background thread.
+noise_classifier:
+  enabled: false
+
+  # Path to the trained model checkpoint (relative to repo root).
+  # Run `python models/noise_classifier/train.py` to create it.
+  model_path: "models/noise_classifier/model.pt"
+
+  # Classification runs every <cadence_sec> seconds in a background thread.
+  # Uses the most recent audio chunk from pipeline.last_in_chunk.
+  cadence_sec: 0.5
+
+  # Confidence below this threshold reports UNCERTAIN instead of a category.
+  # Prevents a confident-looking wrong label in front of judges.
+  confidence_threshold: 0.6
+
+# ============================================================
+# Phase 4 WOW #3 — DNSMOS Quality Monitor (models/dnsmos/)
+# ============================================================
+# Non-intrusive perceptual MOS estimation (Microsoft DNSMOS P.835).
+# Background thread at 0.5 Hz; first score valid only after a full 9-second
+# window fills (UI shows "measuring..." until then).
+# Requires: onnxruntime>=1.18.0 (NOT the P1-3 export onnx; Pi-compatible).
+# Download the ONNX model first: python models/dnsmos/download_model.py
+# Default false: no onnxruntime import, no model load, no thread.
+dnsmos:
+  enabled: false
+
+  # Directory containing sig_bak_ovr.onnx (downloaded separately).
+  model_dir: "models/dnsmos"
+
+  # Background inference cadence (seconds between score updates).
+  cadence_sec: 2.0
+
+  # Length of the audio window fed to the model (seconds).
+  # DNSMOS P.835 expects ~9 seconds at 16 kHz for reliable estimates.
+  window_sec: 9.01
+
+  # Display a warning when overall MOS falls below this threshold.
+  warn_threshold: 2.5
+
+  # Automatically flip to bypass mode when MOS < warn_threshold.
+  # KEEP FALSE for demos: an automatic mode flip mid-demo is a bigger
+  # risk than a low number on screen (Risk R8, phase4_plan.md).
+  auto_bypass: false
+
+# ============================================================
+# Phase 4 WOW #2 — Web Dashboard (demo/webdash/)
+# ============================================================
+# FastAPI + WebSocket server; serve a judge-operable phone UI over LAN.
+# NOT started automatically by the pipeline — launch separately:
+#   python demo/webdash/app.py
+# Unauthenticated; bind to LAN interface; demo-scoped (no secrets served).
+webdash:
+  # Network interface to bind. "0.0.0.0" = all interfaces including LAN.
+  # Change to the Pi's specific LAN IP for production isolation.
+  host: "0.0.0.0"
+  port: 8080
+
+  # Telemetry push rate to connected WebSocket clients (Hz).
+  telemetry_hz: 4

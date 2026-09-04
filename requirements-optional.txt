@@ -56,3 +56,40 @@ onnxruntime>=1.29.0
 # newer torch releases (confirmed: the Pi's), torch.onnx.export() imports
 # dynamo exporter machinery internally regardless of which path runs.
 onnxscript>=0.7.1
+
+# --- P4-1 WOW #2: web dashboard (demo/webdash/) ---
+# FastAPI + Uvicorn serve live telemetry and /mode/{enhance|bypass} over LAN.
+# Not in requirements.txt: a resolution failure here cannot block the demo
+# path (same policy as scipy -- the core pipeline is unaffected when the
+# webdash is not started, same as the dashboard is a separate process).
+#
+# Pin rationale:
+#   fastapi>=0.100: first release that dropped Python<3.8; stable REST/WS API.
+#   uvicorn[standard]: the [standard] extra bundles websockets and httptools
+#     required for WebSocket support; not a separate package.
+#   qrcode[pil]: [pil] is the Pillow extra needed to write image files. Pillow
+#     is also pulled in by deepfilternet on many installs, so usually free.
+# All three have cp313/aarch64 wheels (Pi-compatible).
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+qrcode[pil]>=7.4
+
+# --- P4-2 WOW #3: DNSMOS non-intrusive MOS monitor (models/dnsmos/) ---
+# onnxruntime for INFERENCE ONLY -- NOT the P1-3 ONNX export path above.
+# Unlike the P1-3 block, this IS Pi-compatible: onnxruntime inference has no
+# dependency on `onnx` or `ml_dtypes`, so the numpy<2.0/numpy>=2.1 conflict
+# on Python 3.13 never triggers (verified against PyPI metadata 2026-09-04;
+# see phase4_plan.md §1.2 for the full analysis).
+#
+# VERSION STRATEGY (D3-A, phase4_plan.md §4):
+#   Dev machine (Python 3.9.25): onnxruntime==1.18.0
+#     Last release to publish a cp39 wheel; 1.19.0 dropped Python 3.9.
+#   Pi (Python 3.13):            onnxruntime>=1.18.0
+#     1.29.0 verified compatible; manylinux_2_17_aarch64 wheel available.
+# ONNX model format and InferenceSession API are stable across 1.18→1.29.
+# Timing numbers from the dev machine are dev-machine numbers only (Rule 5).
+#
+# Do NOT install this alongside the P1-3 onnxruntime line in one pip call;
+# they share the same package name. Install the right version separately:
+#   Python 3.9 (dev):   pip install onnxruntime==1.18.0
+#   Python 3.13 (Pi):   pip install "onnxruntime>=1.18.0"

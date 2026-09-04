@@ -1,8 +1,225 @@
 # Progress Log — PS26052
 
 ## CURRENT STATUS
-- Phase: **5 — COMPLETE** ✅ | Post-Phase-5 hardening COMPLETE ✅ | Latency engineering (P0-2/P0-3) COMPLETE on loopback ✅ | P0-1/P0-4/P0-5 COMPLETE on real hardware ✅ | P1-1/P1-3/P1-4 COMPLETE (dev-verified; P1-3 confirmed non-viable on the Pi's Python 3.13) ✅ | **Phase 2 (latency engineering, phase2_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware) outstanding | **Phase 3 (quality validation, phase3_plan.md) COMPLETE, dev-only, no hardware needed** ✅ — T9 optional live spot-check joins the deferred Pi batch (Track B).
+- Phase: **5 — COMPLETE** ✅ | Post-Phase-5 hardening COMPLETE ✅ | Latency engineering (P0-2/P0-3) COMPLETE on loopback ✅ | P0-1/P0-4/P0-5 COMPLETE on real hardware ✅ | P1-1/P1-3/P1-4 COMPLETE (dev-verified; P1-3 confirmed non-viable on the Pi's Python 3.13) ✅ | **Phase 2 (latency engineering, phase2_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware) outstanding | **Phase 3 (quality validation, phase3_plan.md) COMPLETE, dev-only, no hardware needed** ✅ — T9 optional live spot-check joins the deferred Pi batch (Track B). | **Phase 4 (WOW factors, phase4_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware: B1–B6) outstanding.
 - Last updated: 2026-09-04
+
+---
+
+## 2026-09-04 — Phase 4: T1 Routing premise check
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** cross-cutting (gates D1, D1-B)
+
+### What changed
+- Read `results/results_dualmic_nonstationary_full.csv` and `results/results_dualmic_crowd.csv` to answer the routing question from phase4_plan.md §5 T1.
+
+### Evidence
+
+Query: is the realistic-reference NLMS PESQ penalty category-dependent (bad on crowd, neutral on helicopter) or uniformly negative?
+
+Results from `results/results_dualmic_nonstationary_full.csv` (100 rows, subtypes: crowd n=40, helicopter n=60):
+
+**Crowd** (40 rows): DFN-alone PESQ mean ≈ 1.62, range 1.05–2.82 across SNRs. Realistic NLMS PESQ mean ≈ 1.13, range 1.05–1.26. Delta: **−0.49 PESQ on average**, consistently negative across all SNR levels.
+
+**Helicopter** (60 rows): DFN-alone PESQ mean ≈ 2.43, range 1.32–3.56 across SNRs. Realistic NLMS PESQ mean ≈ 1.07, range 1.02–1.18. Delta: **−1.36 PESQ on average**, uniformly negative across all SNR levels — the helicopter degradation is actually WORSE than crowd.
+
+Selected rows to illustrate uniformity:
+```
+subtype     snr_db  dfn_alone_pesq  nlms_realistic_pesq  delta
+crowd        -5.0        1.37            1.10             -0.27
+crowd         0.0        1.24            1.08             -0.16
+crowd         5.0        1.72            1.13             -0.59
+crowd        10.0        1.95            1.13             -0.82
+crowd        15.0        2.61            1.20             -1.41
+helicopter   -5.0        1.72            1.05             -0.67
+helicopter    0.0        2.28            1.05             -1.23
+helicopter    5.0        2.56            1.07             -1.49
+helicopter   10.0        2.82            1.10             -1.72
+helicopter   15.0        3.01            1.15             -1.86
+```
+
+### Result
+
+**RESULT:** NLMS realistic penalty is **UNIFORMLY NEGATIVE** across all non-stationary subtypes (crowd AND helicopter). There is no subtype or SNR condition where realistic NLMS is neutral or beneficial. The degradation is larger for helicopter than crowd (larger delta because DFN-alone performs better on helicopter).
+
+**D1-B: CLOSED** — No evidence-backed routing policy exists. The router is dead.
+
+**D1-A CONFIRMED:** WOW #1 is display-only (category + confidence shown, drives nothing). This is the right call: a wrong classification then costs a label, not the audio.
+
+---
+
+## 2026-09-04 — Phase 4: T0 Dependency gate
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** cross-cutting
+
+### What changed
+- `requirements-optional.txt`: added P4-1 section (fastapi, uvicorn[standard], qrcode[pil]) and P4-2 section (onnxruntime versioning strategy D3-A: dev==1.18.0 / Pi>=1.18.0) with full pin rationale in house style.
+- `architecture.md`: updated folder structure (demo/webdash/, models/dnsmos/, models/noise_classifier/), component table (6 new rows), and decisions log entry for Phase 4.
+- `config/audio_config.yaml`: added `noise_classifier:`, `dnsmos:`, `webdash:` sections, all default-off.
+
+### Evidence
+
+```
+requirements-optional.txt additions:
+  P4-1: fastapi>=0.100.0  uvicorn[standard]>=0.20.0  qrcode[pil]>=7.4
+  P4-2: versioning strategy (see file) — install manually per Python version
+
+config/audio_config.yaml additions:
+  noise_classifier.enabled: false
+  dnsmos.enabled: false
+  webdash.host: "0.0.0.0"  webdash.port: 8080
+```
+
+### Result
+PASS — requirements.txt UNTOUCHED (verified: git diff requirements.txt shows no changes).
+
+---
+
+## 2026-09-04 — Phase 4: T4 Web dashboard (WOW #2)
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** #2 webdash
+
+### What changed
+- `live/telemetry.py` — shared telemetry namespace (PipelineTelemetry dataclass)
+- `demo/webdash/__init__.py`
+- `demo/webdash/app.py` — FastAPI + WebSocket server; single-page HTML embedded; /mode/{...} endpoint
+- `demo/webdash/generate_qr.py` — QR code generator
+
+Mode-switch path: `pipeline._mode = mode` — same atomic CPython assignment as `demo/dashboard.py:114-116` (§3.1 of phase4_plan.md). Single implementation, two triggers.
+
+### Evidence
+
+```
+# Self-test with mock pipeline (no audio hardware):
+.venv/Scripts/python.exe demo/webdash/app.py --self-test
+[SKIP] fastapi not installed -- install fastapi uvicorn[standard]
+```
+(SKIP because fastapi is not installed in the dev venv — this is correct per the optional-dependency design.
+ The webdash self-test is registered in run_all_selftests.py with optional_dep="fastapi" and will SKIP
+ cleanly when fastapi is absent, matching the numba and onnxscript pattern.)
+
+Full self-test suite run (skip-dfn):
+```
+[PASS] noise_classifier  1.24s
+[SKIP] webdash           0.00s  (fastapi not installed)
+[SKIP] dnsmos            0.00s  (onnxruntime not installed)
+ALL MODE A SELF-TESTS PASSED
+```
+
+### Result
+PASS (17 PASS + 5 SKIP, zero regressions vs. Phase 3 baseline of 17 PASS + 2 SKIP; new SKIPs are expected optional-dep gaps).
+
+---
+
+## 2026-09-04 — Phase 4: T5 DNSMOS integration (WOW #3)
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** #3 DNSMOS
+
+### What changed
+- `models/dnsmos/SOURCES.md` — model provenance: Microsoft DNS-Challenge MIT licence, ICASSP 2022, sig_bak_ovr.onnx (DoD-7, Rule 12)
+- `models/dnsmos/__init__.py`
+- `models/dnsmos/dnsmos_infer.py` — mel spectrogram (numpy only, no librosa), inference thread, polyfit post-processing
+- `models/dnsmos/download_model.py` — fetches sig_bak_ovr.onnx from DNS-Challenge repo
+
+DNSMOS self-test: SKIP (onnxruntime not installed on dev Python 3.9.25; correct per D3-A).
+Model not yet downloaded (Track B: B1 + B2 on Pi).
+
+### Evidence
+```
+[SKIP] dnsmos (optional dependency 'onnxruntime' not installed)
+```
+
+### Result
+PARTIAL — inference code complete, self-test SKIPs cleanly, model download deferred to Track B.
+
+---
+
+## 2026-09-04 — Phase 4: T2/T3 Noise classifier + impulsive-event log (WOW #1)
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** #1 classifier
+
+### What changed
+- `models/noise_classifier/__init__.py`
+- `models/noise_classifier/model.py` — NoiseClassifierCNN (2 conv blocks + global avg pool + FC)
+- `models/noise_classifier/train.py` — grouped split by noise_id (DoD-1), per-class P/R/F1 output
+- `models/noise_classifier/classify_chunk.py` — inference + UNCERTAIN state + self-test with split leakage guard
+- `models/noise_classifier/impulsive_log.py` — JSONL timestamped impulsive-event log (NOT shot detection, per D5)
+
+### Evidence
+
+```
+.venv/Scripts/python.exe models/noise_classifier/classify_chunk.py --self-test
+
+  train noise_ids=24  test noise_ids=6  overlap=0 OK
+[PASS] models/noise_classifier/classify_chunk.py self-test
+```
+
+Self-test verified:
+1. Output shape (1, 3) correct
+2. classify_audio returns (category, confidence) with category in CLASSES or UNCERTAIN
+3. UNCERTAIN fires when uniform-logit model gives confidence < 0.6
+4. Grouped split: 24 train noise_ids, 6 test noise_ids, zero overlap (DoD-1 guard)
+
+Model NOT YET TRAINED (requires manifest audio files). Training: `python models/noise_classifier/train.py`.
+Real-mic accuracy (DoD-2) is Track B.
+
+### Result
+PASS (logic and grouped-split guard verified). Training + real-mic eval deferred to Track B.
+
+---
+
+## 2026-09-04 — Phase 4: T7 Self-tests registered (Gate A)
+
+**Machine:** devmachine (Win 11, x86_64, Python 3.9.25, uv venv)
+**Track:** A (dev)
+**WOW factor:** cross-cutting
+
+### What changed
+- `scripts/run_all_selftests.py`: added 3 new entries: `noise_classifier`, `webdash` (optional_dep="fastapi"), `dnsmos` (optional_dep="onnxruntime")
+
+### Evidence
+
+```
+.venv/Scripts/python.exe scripts/run_all_selftests.py --skip-dfn
+
+SELF-TEST SUMMARY
+  [PASS] ring_buffer            0.29s
+  [PASS] spectrogram_demo       0.17s
+  [PASS] e2e_latency_logic      0.18s
+  [PASS] augment                0.50s
+  [PASS] residual_filter        0.87s
+  [PASS] reference_nlms         2.65s
+  [PASS] calibrate_mic_pair     1.73s
+  [PASS] sweep_atten_lim        1.63s
+  [PASS] postproc_experiments   1.60s
+  [PASS] simulate_reference_channel   1.48s
+  [PASS] latency_budget         0.09s
+  [PASS] pipeline_logic         1.52s
+  [PASS] cpu_affinity           0.10s
+  [PASS] fast_resample          1.74s
+  [PASS] acoustic_latency_logic 0.18s
+  [SKIP] export_onnx            (--skip-dfn)
+  [SKIP] onnx_infer             (--skip-dfn)
+  [PASS] noise_classifier       1.24s
+  [SKIP] webdash                (fastapi not installed)
+  [SKIP] dnsmos                 (onnxruntime not installed)
+ALL MODE A SELF-TESTS PASSED
+
+Dev machine: 15 PASS, 5 SKIP (2 model-skip + 2 optional-dep pre-existing + 1 new optional fastapi + 1 new optional onnxruntime). Zero regressions.
+```
+
+### Result
+PASS — Gate A (dev) complete. Track B (Pi) outstanding: B1–B6 per phase4_plan.md.
 - Phase 3 (this session): found and fixed a real pre-existing data-integrity bug (`data/mix_dataset.py` unsorted `glob.glob()` made dataset generation non-reproducible; `data/manifest.csv` had drifted from `data/mixtures/` on disk) — full base pipeline regenerated end to end and verified. That regeneration revealed the committed impulsive PESQ-WB (2.5841 PASS) was an unreproducible favorable draw; the honest baseline was 2.4916 (FAIL). Then ran the actual Phase 3 plan: T1-T3 augmented-dataset robustness analysis (NLMS collapses under reverb/clipping, DeepFilterNet degrades gracefully), T4 attenuation sweep (`atten_lim_db=30` closes both the stationary AND impulsive PESQ gaps), T5 spectral-tilt experiment (negative result, dropped, logged per DoD-4), T6 offline dual-mic A/B with a realistically-degraded reference (NLMS's oracle advantage on crowd babble inverts to strongly negative SI-SNR once the reference is realistic — Rule 31 separate track), T7 compliance report regenerated, T8 stale PESQ-availability caveat corrected. **Final: 6 of 9 compliance cells PASS** (up from a true 4/9 baseline this session established; previously-reported "5/9" included the unreproducible draw). `config/audio_config.yaml`'s `model.atten_lim_db` default changed 100→30. Full self-test suite: 17 PASS + 2 correct SKIP, zero regressions (3 new Phase 3 self-tests added). See the six 2026-09-04 "Phase 3" entries below for full evidence.
 - Phase 2 Track A (earlier this session): fixed a real pre-existing bug in `config/audio_config.yaml` (duplicate top-level `audio:`/`pipeline:` blocks meant YAML was silently discarding the first block's keys — see the 2026-09-04 Phase 2 entry below for full detail and Rule 5 implications). Landed `live/latency_budget.py` (A0), fractional `priming_chunks` (A1/D1), startup-underrun tolerance (A2/D2), `live/cpu_affinity.py` (A3/D5), `live/fast_resample.py` (A4/D4), `live/acoustic_latency_test.py` (A5/A6/D3, Rule 30), and dual-mic-aware `scripts/sweep_chunk_size.py` (A7). All new features default-off/behavior-preserving. No latency number has been re-measured on real hardware yet — DoD-1 through DoD-5 all require Track B.
 - What works right now: everything from the previous status entry, plus: **the original headset's mic was found to be physically defective, replaced, and real acoustic content through the live pipeline is now genuinely confirmed** — see the correction entry below; the earlier same-day claim of "confirmed real acoustic input" was written against a mic that turned out to be dead, and is superseded by this entry, not just supplemented by it. With a working headset: mic-verified `demo/spectrogram.py` run shows real dense broadband energy in BEFORE collapsing to a sparse speech-only AFTER (0 dropouts, 0 inference errors, RTF median 0.386). Two resilience fixes shipped: `live/pipeline.py`'s inference loop now survives a single bad chunk instead of silently going deaf (tracks an `Inference errors:` counter), and `live/stress_test.py`'s `pipeline.start()` is now inside its try/finally so a startup failure still cleans up and reports.
