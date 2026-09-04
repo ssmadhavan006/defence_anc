@@ -54,9 +54,14 @@ Main dependencies: PyTorch 2.5.1 + torchaudio, DeepFilterNet 0.5.6, numba, scipy
 From the repository root. Each step is seeded and idempotent — re-runs skip completed work.
 
 ```bash
-# 1. Acquire raw corpora (LibriSpeech dev-clean speech + ESC-50 noise subsets)
+# 1. Acquire raw corpora (LibriSpeech dev-clean speech + ESC-50 noise subsets + Zenodo gunshot)
 uv run python scripts/download_datasets.py
-uv run python scripts/generate_babble_noise.py
+
+# 1b. Corpus v2 (2026-09-04): non_stationary = helicopter/wind/aircraft, not helicopter/crowd.
+#     wind + aircraft are extracted from the already-downloaded ESC-50 archive (no new download).
+#     See docs/corpus_redefinition_v2.md for why the crowd subtype was retired.
+uv run python scripts/extract_esc50_subtype.py --class-name wind     --dest data/noise/non_stationary/wind
+uv run python scripts/extract_esc50_subtype.py --class-name airplane --dest data/noise/non_stationary/aircraft
 
 # 2. Synthesize the 300-mixture dataset -> data/mixtures/ + data/manifest.csv
 uv run python data/mix_dataset.py
@@ -77,9 +82,10 @@ Utility checks along the way:
 
 ```bash
 uv run python scripts/run_pilot_benchmarks.py   # pilot timing + full-run extrapolation
-uv run python scripts/audit_snr.py              # independent post-hoc SNR audit
 uv run python scripts/check_env_metrics.py      # metric library availability check
 ```
+
+Achieved-vs-requested SNR is audited inline during generation, not as a separate post-hoc step: `data/mix_dataset.py` computes each mixture's real achieved SNR and records it in `data/manifest.csv`'s `achieved_snr_db`/`snr_dev_db` columns (Rule 13) — see that file directly rather than a standalone audit script.
 
 ### Processing your own audio (no dataset needed)
 
@@ -111,18 +117,25 @@ baselines/nlms/        numba-JIT NLMS adaptive filter
 baselines/spectral_subtraction/   spectral subtraction (Berouti/Boll)
 baselines/wiener/      decision-directed Wiener filter
 models/deepfilternet/  DFN3 manifest-driven batch inference
-eval/                  PESQ-WB / STOI / SI-SNR engine + batch evaluator
-scripts/               downloads, orchestration, pilots, audits, diagnostics
+models/noise_classifier/  Phase 4 WOW #1 -- 3-class noise classifier, display-only (see Status)
+models/dnsmos/         Phase 4 WOW #3 -- DNSMOS quality monitor (ONNX, optional dep)
+eval/                  PESQ-WB / STOI / SI-SNR engine + batch evaluator + compliance report generator
+scripts/               downloads, orchestration, pilots, diagnostics, corpus-v2 extraction, preflight check
 results/charts/        category × method comparison charts
-live/                  real-time pipeline: ring buffer, inference engine, streaming orchestrator, latency/stress tests
-demo/                  terminal dashboard + live spectrogram for the judged demo
-config/                audio_config.yaml — hardware device IDs, chunk size, pipeline mode
+results/v1_crowd/      archived pre-corpus-v2 results (crowd subtype), preserved not deleted
+live/                  real-time pipeline: ring buffer, inference engine, streaming orchestrator,
+                       dual-mic + reference NLMS, backup-audio playback, RTF health check, latency/stress tests
+demo/                  terminal dashboard + live spectrogram, web dashboard (Phase 4 WOW #2),
+                       backup demo mode + rehearsed launch script (Phase 5.1/5.2), systemd unit template
+config/                audio_config.yaml — hardware device IDs, chunk size, pipeline mode, health check
 requirements.txt          Pi core deps — must always install cleanly (the live pipeline's demo path)
-requirements-optional.txt Pi optional deps (residual filter, ONNX backend, scipy) — never blocks the core install
+requirements-optional.txt Pi optional deps (residual filter, ONNX backend, fastapi/uvicorn, onnxruntime) — never blocks the core install
 ```
 
 ## Project documentation
 
+- [till_now.md](till_now.md) — the canonical phase-by-phase status: what's actually done (dev-verified
+  vs. hardware-verified) vs. what's left, checked against the file system rather than asserted
 - [architecture.md](architecture.md) — component matrix, data flow diagrams, decisions log
 - [rules.md](rules.md) — engineering discipline rules governing the pipeline
 - [progress.md](progress.md) — append-only execution log with command evidence
@@ -130,7 +143,18 @@ requirements-optional.txt Pi optional deps (residual filter, ONNX backend, scipy
 
 ## Status
 
-All phases complete (0–5). The offline batch pipeline (dataset, DSP baselines, DeepFilterNet, evaluation) is fully evaluated, and the real-time live pipeline is physically verified on Raspberry Pi 5 hardware:
+**For the full, honest phase-by-phase accounting — what's dev-verified vs. hardware-verified vs. not
+started, checked directly against the file system — see [till_now.md](till_now.md).** The summary
+below is necessarily incomplete; that document is the canonical source, not this one.
+
+The offline batch pipeline (dataset, DSP baselines, DeepFilterNet, evaluation) is fully evaluated and
+dev-verified. The real-time live pipeline's **single-mic baseline** was physically verified on
+Raspberry Pi 5 hardware (below) *before* Phase 1's dual-mic work, Phase 4's WOW features, and Phase
+5's demo-bulletproofing additions existed — none of those three have been run on real Pi hardware yet
+(Mode B, deferred to a batched hardware pass; see till_now.md). "All phases complete" would overstate
+this: Phases 0–4 are dev-machine complete, Phase 5 is dev-machine complete for sections 5.1–5.3 only
+(5.4 presentation deck and 5.5 backup video are not started), and every hardware-dependent
+confirmation across all five phases remains outstanding.
 
 - **Live streaming**: `sounddevice` capture → ring buffer → DeepFilterNet3 → ring buffer → playback, running on-device (`live/pipeline.py`).
 - **Per-chunk model inference time** (Pi 5, in-memory, isolated call, 10 reps): 29.18 ms median (RTF 0.29), 0-sample cross-correlation lookahead. This is inference only — not a round-trip or end-to-end figure.
@@ -144,4 +168,22 @@ Post-Phase-5 additions, all off by default / non-invasive to the demo path unles
 - **Residual noise-suppression stage** (`live/residual_filter.py`, `pipeline.residual_filter: true`): reference-free adaptive filter after DeepFilterNet. Mechanically verified stable on the Pi (10-min stress, 0 dropouts); audio-quality impact not yet validated against the eval set, hence off by default.
 - **ONNX Runtime inference backend** (`models/deepfilternet/export_onnx.py`, `pipeline.inference_backend: onnx`): verified bit-exact vs PyTorch and ~42% faster on an x86_64 dev machine. **Not usable on this Pi's Python 3.13** — `onnx`'s `ml_dtypes` dependency requires `numpy≥2.1` there, which conflicts with `deepfilternet`'s `numpy<2.0` requirement; a hard upstream constraint, not a config issue. Optional dependencies for both of the above live in `requirements-optional.txt`, kept separate from `requirements.txt` so the core live pipeline's install can never be blocked by an optional feature.
 
-Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: after Phase 3 tuning (`atten_lim_db=30`) and the corpus v2 redefinition, PESQ-WB now clears the >2.5 DRDO target in all three categories (2.54 / 2.54 / 2.54), and the single remaining failure across the whole matrix is **non-stationary SI-SNR at 14.18 dB against >15 dB**; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.
+Full Pi 5 evidence (single-mic baseline): [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: after Phase 3 tuning (`atten_lim_db=30`) and the corpus v2 redefinition, PESQ-WB now clears the >2.5 DRDO target in all three categories (2.54 / 2.54 / 2.54), and the single remaining failure across the whole matrix is **non-stationary SI-SNR at 14.18 dB against >15 dB**; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.
+
+### Phase 4 — WOW factors (dev-verified, not yet run on Pi)
+
+Three differentiators, all self-tested and **off by default**:
+- **Noise classifier** (`models/noise_classifier/`): 3-class CNN, grouped split by `noise_id` to prevent leakage. **Display-only** — the plan's original "adaptive attenuation router" was found to have no evidence-backed policy (every noise category wants the same `atten_lim_db=30`, per Phase 3), and the "doubles as shot detection" claim was dropped (Rule 32 — a 3-class classifier can't distinguish a gunshot from a door slam). It's an "impulsive-event log," not a shot detector.
+- **Web dashboard** (`demo/webdash/`): FastAPI + WebSocket, phone-accessible over LAN via QR code, judge-operable bypass/enhance toggle.
+- **DNSMOS quality monitor** (`models/dnsmos/`): reference-free MOS estimation. The documented ONNX blocker applies only to the `onnx` package (model export), not `onnxruntime` (inference) — likely viable on the Pi's Python 3.13, not yet confirmed there.
+
+None of the three have been exercised against real hardware (Pi timing, phone/LAN test, real-mic classifier accuracy) — see till_now.md's Phase 4 section.
+
+### Phase 5.1–5.3 — Demo bulletproofing (dev-verified, not yet run on Pi)
+
+- **Backup demo mode** (`demo/backup_playback.py`, `live/main.py pipeline --backup <path>`): if the live mic fails mid-demo, one flag switches input to a pre-recorded 60-second clip built from the project's own real corpus (real gunshot + engine + speech) — the real output hardware and real enhancement pipeline are unaffected, so judges still hear the actual system, not a separate playback tool.
+- **Rehearsed launch script** (`demo/run_judged_demo.sh`): runs a pre-flight gate, refreshes the QR code, and launches exactly one UI process (default the web dashboard) — not all of dashboard/spectrogram/webdash at once, since each independently owns the real audio hardware and can't run concurrently against it. Idempotent (safe to re-run or `--stop`); `demo/ps26052-demo.service` is the systemd alternative for auto-restart.
+- **RTF health check** (`live/pipeline.py`): if real-time factor stays above 0.9 for a sustained 5 seconds, auto-switches to bypass mode once (no flapping) to avoid an audible failure — logic-verified, not yet exercised against a genuine overload on Pi hardware.
+- **Pre-flight check** (`scripts/preflight_check.py`): red/green readiness gate — config, devices, model load, self-tests, optional-dependency status — runnable and run for real on any machine (correctly reports what's actually attached).
+
+Cold-boot-to-demo timing, a real induced crash, and a real sustained-overload condition are all Mode B — not yet measured on the Pi.
