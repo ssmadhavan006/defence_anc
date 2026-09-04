@@ -20,20 +20,20 @@ Every stage is driven by a single seeded manifest (`data/manifest.csv`), making 
 
 Evaluated on 300 synthetic mixtures (3 noise categories × 5 SNR levels from −5 to +15 dB × 20 seeds): 1500 condition–mixture pairs scored with PESQ-WB, STOI, SI-SNR, and ΔSI-SNR vs the noisy input. All 1500 evaluations valid, zero exclusions.
 
-| Noise category | Best classical | DeepFilterNet |
+| Noise category | Best classical | DeepFilterNet (tuned, `atten_lim_db=30`) |
 |---|---|---|
-| Stationary (engine/vehicle) | +3.97 dB ΔSI-SNR · 0.90 STOI | **+11.10 dB ΔSI-SNR · 0.92 STOI · 2.48 PESQ-WB** |
-| Non-stationary (helicopter/crowd) | +2.86 dB ΔSI-SNR · 0.88 STOI | **+5.75 dB ΔSI-SNR · 0.83 STOI · 2.13 PESQ-WB** |
-| Impulsive (gunshot/artillery) | +0.27 dB ΔSI-SNR · 0.86 STOI | **+10.75 dB ΔSI-SNR · 0.93 STOI · 2.58 PESQ-WB** |
+| Stationary (engine/vehicle) | +3.97 dB ΔSI-SNR · 0.90 STOI (NLMS) | **+11.07 dB ΔSI-SNR · 0.91 STOI · 2.54 PESQ-WB** |
+| Non-stationary (helicopter/crowd) | +2.86 dB ΔSI-SNR · 0.88 STOI (NLMS) | **+5.86 dB ΔSI-SNR · 0.83 STOI · 2.21 PESQ-WB** |
+| Impulsive (gunshot/artillery) | +0.47 dB ΔSI-SNR · 0.83 STOI (Wiener) | **+10.24 dB ΔSI-SNR · 0.92 STOI · 2.54 PESQ-WB** |
 
 Two findings drive the design argument:
 
-- **Adaptive filters fail structurally on impulsive noise.** NLMS *loses* 7.1 dB of SI-SNR on real gunshot/artillery transients (Zenodo Record 7004819, CC BY 4.0) due to convergence lag — verified by zero-lag cross-correlation ablation to be inherent to gradient-based adaptation, not an alignment artifact.
-- **Deep learning closes the gap.** DeepFilterNet maintains +10–11 dB improvement where classical methods collapse or stall. On impulsive noise it clears all three DRDO targets (SI-SNR > 15 dB, STOI > 0.85, **PESQ-WB > 2.5**) on the full SNR-averaged evaluation, not just at high input SNR.
+- **Adaptive filters fail structurally on impulsive noise.** NLMS *loses* 3.3 dB of SI-SNR on real gunshot/artillery transients (Zenodo Record 7004819, CC BY 4.0) due to convergence lag — verified by zero-lag cross-correlation ablation to be inherent to gradient-based adaptation, not an alignment artifact. Under Phase 3's augmentation robustness test (reverb + mic clipping) NLMS collapses further still, losing 4+ dB in every category, while DeepFilterNet degrades far more gracefully (see [docs/augmentation_robustness.md](docs/augmentation_robustness.md)).
+- **Deep learning closes the gap.** DeepFilterNet maintains +10–11 dB improvement where classical methods collapse or stall. After Phase 3 tuning (`atten_lim_db=30`, see [progress.md](progress.md) 2026-09-04) it clears all three DRDO targets (SI-SNR > 15 dB, STOI > 0.85, **PESQ-WB > 2.5**) on **both** stationary and impulsive noise on the full SNR-averaged evaluation, not just at high input SNR.
 
-Non-stationary is the one open gap, and it's narrower than the category number suggests: it's driven almost entirely by crowd/babble (other human speech — a single-channel enhancer structurally can't separate target speech from background speech, the cocktail-party problem), while helicopter alone scores STOI 0.91 / +8.9 dB ΔSI-SNR, on par with the strongest categories. See [docs/non_stationary_root_cause.md](docs/non_stationary_root_cause.md) for the subtype-level breakdown.
+Non-stationary is the one open gap, and it's narrower than the category number suggests: it's driven almost entirely by crowd/babble (other human speech — a single-channel enhancer structurally can't separate target speech from background speech, the cocktail-party problem), while helicopter alone scores STOI 0.91 / +8.9 dB ΔSI-SNR, on par with the strongest categories. A dual-mic reference-assisted mitigation was tested with a realistically-degraded reference and does not rescue it either — the oracle-reference advantage inverts to strongly negative SI-SNR under realistic conditions. See [docs/non_stationary_root_cause.md](docs/non_stationary_root_cause.md) for the subtype-level breakdown and the dual-mic finding.
 
-Full per-method tables live in [docs/phase_4_summary.md](docs/phase_4_summary.md) and [results/final/target_compliance.md](results/final/target_compliance.md); charts in `results/charts/`.
+**Compliance: 6 of 9 metric cells PASS** (stationary and impulsive clear all three targets; non-stationary remains the one structural, root-caused gap). Full per-method tables live in [docs/phase_4_summary.md](docs/phase_4_summary.md) and [results/final/target_compliance.md](results/final/target_compliance.md); charts in `results/charts/`.
 
 ## Getting started
 
@@ -140,4 +140,4 @@ Post-Phase-5 additions, all off by default / non-invasive to the demo path unles
 - **Residual noise-suppression stage** (`live/residual_filter.py`, `pipeline.residual_filter: true`): reference-free adaptive filter after DeepFilterNet. Mechanically verified stable on the Pi (10-min stress, 0 dropouts); audio-quality impact not yet validated against the eval set, hence off by default.
 - **ONNX Runtime inference backend** (`models/deepfilternet/export_onnx.py`, `pipeline.inference_backend: onnx`): verified bit-exact vs PyTorch and ~42% faster on an x86_64 dev machine. **Not usable on this Pi's Python 3.13** — `onnx`'s `ml_dtypes` dependency requires `numpy≥2.1` there, which conflicts with `deepfilternet`'s `numpy<2.0` requirement; a hard upstream constraint, not a config issue. Optional dependencies for both of the above live in `requirements-optional.txt`, kept separate from `requirements.txt` so the core live pipeline's install can never be blocked by an optional feature.
 
-Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: PESQ-WB misses the >2.5 DRDO target on stationary (2.48) and non-stationary (2.13) noise on the full SNR-averaged evaluation — impulsive now passes (2.58) with the corrected gunshot/artillery dataset; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.
+Full Pi 5 evidence: [docs/phase_5_summary.md](docs/phase_5_summary.md). Known gap: after Phase 3 tuning (`atten_lim_db=30`), PESQ-WB still misses the >2.5 DRDO target on non-stationary (2.21) on the full SNR-averaged evaluation — stationary (2.54) and impulsive (2.54) both now pass; see [results/final/target_compliance.md](results/final/target_compliance.md) for the full compliance matrix.

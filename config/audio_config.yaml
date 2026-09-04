@@ -2,6 +2,20 @@
 # PS26052 — Phase 5 Live Pipeline Audio Configuration
 # Edit this file to match the physical hardware at demo time.
 # All units are SI unless noted.
+#
+# BUG FIX (Phase 2, 2026-09-04): this file used to declare TWO top-level
+# `audio:` blocks and TWO top-level `pipeline:` blocks (the Phase 1 dual-mic
+# section was appended as new top-level keys instead of nested under the
+# existing ones). YAML silently collapses duplicate mapping keys to the LAST
+# one seen -- `yaml.safe_load` was therefore discarding sample_rate,
+# chunk_duration_sec, input_device, output_device, priming_chunks, and every
+# other key from the first `audio:`/`pipeline:` block, keeping only
+# dual_mic/reference_nlms. live/pipeline.py's `_load_config` deep-merge then
+# fell back to its hard-coded defaults for everything that got dropped
+# (input_device/output_device silently became `None` -> auto-detect, not the
+# configured Generalplus indices). Merged into single blocks below so every
+# key in this file is actually loaded. Verified via
+# `python -c "import yaml; print(yaml.safe_load(open('config/audio_config.yaml', encoding='utf-8')))"`.
 
 audio:
   # Sample rate used by DeepFilterNet. Must NOT be changed without re-testing.
@@ -49,13 +63,58 @@ audio:
   input_device: 1   # USB Audio Device (headset mic)
   output_device: 0  # Jabra Speak 710 (speaker)
 
+  # ============================================================
+  # Phase 1 — Dual-Mic Reference Channel (Topology B: dual USB)
+  # ============================================================
+  # Defaults to disabled so the existing single-mic demo path is completely
+  # unaffected when dual_mic.enabled is false. No numba import occurs, no
+  # second stream is opened, and the pipeline is behaviourally identical to
+  # the pre-Phase-1 state.
+  #
+  # Hardware topology:
+  #   Primary   — 3.5 mm headset mic via USB-A audio dongle  (input_device above)
+  #   Reference — dedicated USB microphone                    (reference_device below)
+  #
+  # Topology B drift note: two separate USB audio devices run on independent
+  # crystal clocks.  At 50 ppm, they drift ~2.4 samples/second at 48 kHz.
+  # Run `python live/main.py calibrate` before each session to measure the
+  # initial delay and write it to config/mic_calibration.yaml.  Keep demo
+  # sessions ≤60 s or re-calibrate mid-session for best NLMS performance.
+  # The NLMS filter's adaptive taps (64 × ~20 µs ≈ 1.3 ms) partially compensate
+  # for slow drift within that window.
+  dual_mic:
+    # Set to true when the reference USB mic is physically connected.
+    enabled: false
+
+    # Device index of the reference USB microphone.
+    # Run `python live/main.py detect` to confirm the current index —
+    # USB enumeration order can shift across reboots/replugs.
+    reference_device: 2
+
+    # Integer sample delay to apply so the reference aligns with the primary.
+    # Measured by `python live/main.py calibrate`; written to
+    # config/mic_calibration.yaml. Copy the value here before each session.
+    # > 0: reference is ahead by this many samples; pipeline delays it.
+    # < 0: primary is ahead; pipeline delays it instead.
+    ref_delay_samples: 0
+
+    # Topology label (informational, not parsed by code).
+    topology: "dual_usb"
+
 model:
   # DeepFilterNet model variant. Only "DeepFilterNet3" is validated.
   variant: "DeepFilterNet3"
 
   # Attenuation limit passed to df.enhance().
   # Range: 0–100 dB. 100 = full suppression, 0 = bypass.
-  atten_lim_db: 100
+  # Phase 3 T4 (2026-09-04): swept {30,50,70,85,100} x post_filter{off,on}. atten_lim_db=30,
+  # post_filter=off maximised PESQ-WB in all 3 categories on a stratified subset, then confirmed on the
+  # full 300-file set: closes both the stationary (2.4823->2.5385) and impulsive (2.4916->2.5428) PESQ
+  # gaps, with STOI/SI-SNR staying within the pre-committed 0.005/0.1dB no-regression tolerance (in fact
+  # improving on 4 of 6 checks). See progress.md 2026-09-04 "Phase 3 T4 Stage 2" entry and
+  # results/atten_sweep.csv for full evidence. post_filter stays off (uniformly regressed every metric
+  # in the sweep -- see docs/postproc_experiments.md).
+  atten_lim_db: 30
 
   # Post-enhancement gain correction (linear, applied after enhance()).
   # Use 1.0 unless there is a measured level mismatch.
@@ -76,17 +135,58 @@ pipeline:
   # Number of warmup inference passes on startup (prevent first-chunk jitter).
   warmup_passes: 3
 
-  # Number of silence chunks pre-loaded into the output ring buffer at
-  # startup so the output callback doesn't underrun before the first real
-  # chunk is enhanced. THIS IS PERMANENT STANDING LATENCY, not one-time
-  # warmup cost -- it never drains (FIFO). priming_chunks * chunk_duration_sec
-  # is added to every measurement of end-to-end latency.
+  # Number of chunk-durations' worth of silence pre-loaded into the output
+  # ring buffer at startup so the output callback doesn't underrun before the
+  # first real chunk is enhanced. THIS IS PERMANENT STANDING LATENCY, not a
+  # one-time warmup cost -- it never drains (FIFO). priming_chunks *
+  # chunk_duration_sec is added to every measurement of end-to-end latency.
+  #
+  # Phase 2 (D1, 2026-09-04): changed from int to FLOAT. 1.0 reproduces the
+  # exact previous behaviour (one whole chunk = 100 ms at the default chunk
+  # size, byte-identical priming sample count). Fractional values below 1.0
+  # trade jitter-absorption headroom for lower standing latency; 0.0 skips
+  # priming entirely (highest risk -- see live/pipeline.py's priming code and
+  # phase2_plan.md D1 for why). Must be validated per value with
+  # `python live/main.py stress` (0 real dropouts required; startup-window
+  # underruns are tracked separately, see startup_grace_sec below).
   # Was hardcoded to 3 (= 300 ms @ 100 ms chunks) -- changed to 1 (2026-08-24)
   # based on measured p95 inference latency (39 ms against a 100 ms chunk
   # budget, i.e. ~61 ms of slack per chunk -- comfortably covered by 1 chunk
-  # of priming). Re-validate with `python live/main.py stress` (0 dropouts
-  # required) after changing this or chunk_duration_sec.
-  priming_chunks: 1
+  # of priming).
+  priming_chunks: 1.0
+
+  # Phase 2 (D2, 2026-09-04): output underruns that occur within this many
+  # seconds of stream start are bucketed as `_startup_underruns` (a cold-start
+  # transient while inference is still producing its first chunks at reduced
+  # priming) rather than `_dropped_chunks` (a real-time miss). Excluded from
+  # the stress-test PASS/FAIL verdict but always printed and stored in the
+  # JSON report -- see live/pipeline.py _output_callback and
+  # live/stress_test.py. Fixed wall-clock cap, not adaptive: a genuinely
+  # broken configuration must not be able to hide behind an unbounded grace
+  # window.
+  startup_grace_sec: 0.5
+
+  # Phase 2 (D5, 2026-09-04): pin the inference thread to specific CPU cores.
+  # null (default) = no pinning, today's behaviour. A list of core indices
+  # (e.g. [2, 3]) attempts os.sched_setaffinity on the inference thread only
+  # -- the audio callbacks run on PortAudio's internal C threads, which are
+  # not reachable from Python this way (see live/cpu_affinity.py and
+  # phase2_plan.md §3.1(b)). No-ops with a warning (never raises) on
+  # platforms without os.sched_setaffinity, e.g. Windows/macOS. Keep only if
+  # an A/B on the Pi shows a real RTF/dropout improvement -- pinning can also
+  # make things worse by removing the scheduler's freedom to migrate work.
+  cpu_affinity: null
+
+  # Phase 2 (D4, 2026-09-04): use the numba-JIT resampler in
+  # live/fast_resample.py instead of the default np.interp-based
+  # live/pipeline.py::_resample for the input/output/reference stream rate
+  # conversion path. Only relevant when a device's native rate differs from
+  # `sample_rate` above. Default false (measure-first, keep-only-if-it-helps
+  # per phase2_plan.md D4 -- np.interp is already compiled C, so the honest
+  # expectation is a negligible gain). Requires numba
+  # (pip install numba==0.67.0); raises a clear RuntimeError at pipeline
+  # start() if enabled without it installed.
+  fast_resample: false
 
   # P1-1: optional residual noise-suppression stage after DeepFilterNet3.
   # Runs a reference-free Adaptive Line Enhancer (live/residual_filter.py) --
@@ -122,3 +222,32 @@ pipeline:
   # progress.md's 2026-08-24 P1-3 entries for the full investigation.
   inference_backend: pytorch
   onnx_dir: results/onnx
+
+  # ============================================================
+  # Phase 1 — Reference-NLMS stage (dual-mic)
+  # ============================================================
+  reference_nlms:
+    # Set to true to activate the reference-NLMS stage.
+    # Requires dual_mic.enabled: true and numba installed.
+    # Off by default until quality is validated with a PESQ/STOI A/B test
+    # (Phase 3) — same policy as the ALE stage (residual_filter).
+    enabled: false
+
+    # Adaptive filter parameters (Widrow NLMS).
+    # filter_length: number of taps; 64 = ~1.3 ms at 48 kHz.
+    # mu: step size.  Smaller = slower convergence, more stable.
+    # eps: regularisation constant (prevents divide-by-zero on silence).
+    filter_length: 64
+    mu: 0.01
+    eps: 1.0e-6
+
+    # Stage placement in the signal chain.
+    # "post_dfn" (default): NLMS runs on DeepFilterNet3's output.
+    #   Cleans up residual noise left by DFN3.  Simpler; no change to
+    #   DFN3's input distribution.  Linear NLMS on a nonlinearly-masked
+    #   signal may be less effective than pre-DFN.
+    # "pre_dfn": NLMS runs before DFN3, feeding a cleaner signal to the
+    #   model.  Preserves the linear noise–reference relationship.
+    # Both are implemented and config-switchable so Phase 3 can measure
+    # which is better.  Default: post_dfn.
+    stage: "post_dfn"

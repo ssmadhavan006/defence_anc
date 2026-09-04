@@ -6,26 +6,56 @@
 
 ## 1. The question
 
-`docs/phase_4_summary.md` and `results/final/target_compliance.json` both show the non-stationary category as the weakest of the three for DeepFilterNet: STOI 0.8297 (target >0.85, FAIL), SI-SNR 10.75 dB (target >15 dB, FAIL), PESQ-WB 2.13 (target >2.5, FAIL, largest miss margin of the three categories). The committed compliance note attributes this jointly to "helicopter/crowd" noise being harder to suppress. This analysis decomposes the category by subtype to check whether that's accurate.
+`docs/phase_4_summary.md` and `results/final/target_compliance.json` both show the non-stationary category as the weakest of the three for DeepFilterNet: STOI 0.8334 (target >0.85, FAIL), SI-SNR 10.86 dB (target >15 dB, FAIL), PESQ-WB 2.21 (target >2.5, FAIL, largest miss margin of the three categories) — figures as of the Phase 3 T4-tuned (`atten_lim_db=30`) configuration; the pre-tuning numbers (STOI 0.8297, SI-SNR 10.75 dB, PESQ-WB 2.13) tell the same story. The committed compliance note attributes this jointly to "helicopter/crowd" noise being harder to suppress. This analysis decomposes the category by subtype to check whether that's accurate.
 
 ## 2. Method
 
-Recomputed directly from `results/eval_raw.csv` (per-mixture, per-method rows), grouped by `(method, subtype)` for `category == non_stationary`. STOI and SI-SNR/ΔSI-SNR are used because they don't depend on the `pesq` package; PESQ-WB is not broken out by subtype here — the local `pesq` C-extension build is currently unavailable in this dev environment (build script targets a different machine profile, `C:\Users\Admin\...`; not reproducible here without a GCC/MinGW toolchain), so only the already-committed category-level PESQ means in `target_compliance.json` are cited below. STOI/SI-SNR figures in this document are freshly recomputed and verified, not carried over from prior docs.
+Recomputed directly from `results/eval_raw.csv` (per-mixture, per-method rows), grouped by `(method, subtype)` for `category == non_stationary`. STOI and SI-SNR/ΔSI-SNR are used because they don't depend on the `pesq` package.
+
+> [!NOTE]
+> **Superseded 2026-09-04 (Phase 3 T8, Rule 27):** the paragraph below originally said PESQ-WB could not
+> be broken out by subtype because "the local `pesq` C-extension build is currently unavailable in this
+> dev environment." **That is no longer true** — verified 2026-09-04 that both `pesq` and `pystoi` import
+> and execute on this machine (a GCC toolchain was installed and `pesq` rebuilt during the 2026-08-24
+> incident recovery — see `progress.md`). The per-subtype PESQ breakdown this caveat said was unavailable
+> is now added in Section 3 below, computed against the current (Phase 3 T4-tuned, `atten_lim_db=30`)
+> configuration. Original text preserved, not deleted, per established project practice:
+>
+> ~~PESQ-WB is not broken out by subtype here — the local `pesq` C-extension build is currently
+> unavailable in this dev environment (build script targets a different machine profile,
+> `C:\Users\Admin\...`; not reproducible here without a GCC/MinGW toolchain), so only the already-committed
+> category-level PESQ means in `target_compliance.json` are cited below.~~
+>
+> STOI/SI-SNR figures in this document were freshly recomputed and verified when first written, not
+> carried over from prior docs; PESQ-WB below is newly added 2026-09-04.
 
 ## 3. Finding: the two subtypes behave completely differently
 
-| Method | Subtype | n | STOI | ΔSI-SNR (dB) | SI-SNR (dB) |
-|---|---|---|---|---|---|
-| **DeepFilterNet** | helicopter | 60 | **0.9108** | **+8.898** | +14.570 |
-| **DeepFilterNet** | crowd | 40 | **0.7080** | **+1.031** | +5.017 |
-| NLMS (ref-assisted) | helicopter | 60 | 0.8889 | +2.996 | +8.668 |
-| NLMS (ref-assisted) | crowd | 40 | 0.8657 | +2.650 | +6.636 |
-| Wiener | helicopter | 60 | 0.8394 | +2.709 | +8.381 |
-| Wiener | crowd | 40 | 0.7170 | +0.345 | +4.331 |
-| Spectral Subtraction | helicopter | 60 | 0.8307 | +1.143 | +6.815 |
-| Spectral Subtraction | crowd | 40 | 0.7195 | +0.186 | +4.172 |
-| Unprocessed noisy | helicopter | 60 | 0.8279 | +0.000 (ref) | +5.672 |
-| Unprocessed noisy | crowd | 40 | 0.7196 | +0.000 (ref) | +3.986 |
+*Table below recomputed 2026-09-04 (Phase 3 T8) against the current, Phase-3-tuned (`atten_lim_db=30`)
+DeepFilterNet configuration and now includes the PESQ-WB column the Section 2 caveat originally said was
+unavailable. STOI/SI-SNR are within 0.03 of the values originally reported here (computed pre-tuning);
+the tuning did not change which subtype drives the gap.*
+
+| Method | Subtype | n | STOI | ΔSI-SNR (dB) | SI-SNR (dB) | PESQ-WB |
+|---|---|---|---|---|---|---|
+| **DeepFilterNet (tuned)** | helicopter | 60 | **0.9082** | **+8.894** | +14.566 | **2.5443** |
+| **DeepFilterNet (tuned)** | crowd | 40 | **0.7212** | **+1.306** | +5.292 | **1.7155** |
+| NLMS (ref-assisted) | helicopter | 60 | 0.8889 | +2.996 | +8.668 | 1.3957 |
+| NLMS (ref-assisted) | crowd | 40 | 0.8657 | +2.650 | +6.636 | 1.4040 |
+| Wiener | helicopter | 60 | 0.8394 | +2.709 | +8.381 | 1.5279 |
+| Wiener | crowd | 40 | 0.7170 | +0.345 | +4.331 | 1.3381 |
+| Spectral Subtraction | helicopter | 60 | 0.8307 | +1.143 | +6.815 | 1.4621 |
+| Spectral Subtraction | crowd | 40 | 0.7195 | +0.186 | +4.172 | 1.3805 |
+| Unprocessed noisy | helicopter | 60 | 0.8279 | +0.000 (ref) | +5.672 | 1.4181 |
+| Unprocessed noisy | crowd | 40 | 0.7196 | +0.000 (ref) | +3.986 | 1.3847 |
+
+**New from the PESQ column:** DeepFilterNet's PESQ-WB on crowd (1.72) is still comfortably the best of any
+method on that subtype (next best: NLMS 1.40, a +0.31 margin) — DeepFilterNet is not failing to help on
+crowd, it is failing to help *enough* to clear the 2.5 target, which is a materially different claim than
+"DeepFilterNet underperforms classical baselines on crowd" (true only for the STOI/ΔSI-SNR metrics
+discussed below, not for PESQ). The 0.83-point PESQ gap between DeepFilterNet's helicopter (2.54) and
+crowd (1.72) results is the largest per-subtype spread of any metric in this table, underscoring how much
+harder crowd babble is across every measure, not just STOI/SI-SNR.
 
 Two things stand out:
 
@@ -52,5 +82,14 @@ NLMS in this evaluation is reference-assisted — it has direct access to the tr
 
 ## 7. Caveats
 
-- PESQ-WB is not broken out by subtype here — see Section 2. The category-level PESQ-WB numbers already committed in `results/final/target_compliance.json` (stationary 2.4823, non-stationary 2.1303, impulsive 2.4916) remain the source of truth for PESQ; this document does not supersede them, only STOI/SI-SNR are freshly recomputed and added here.
+- ~~PESQ-WB is not broken out by subtype here — see Section 2.~~ **Superseded 2026-09-04 (Phase 3 T8):**
+  PESQ-WB per-subtype is now in Section 3 (the `pesq` package caveat in Section 2 was stale — see the
+  superseding note there). The category-level PESQ-WB numbers in `results/final/target_compliance.json`
+  (stationary 2.5385, non-stationary 2.2128, impulsive 2.5428 as of the Phase 3 T4-tuned configuration)
+  remain the source of truth for the compliance verdict; the per-subtype breakdown here is supplementary.
 - n=40 for crowd vs n=60 for helicopter (5 SNR levels × 8 vs 12 mixtures respectively, per the Phase 2 manifest) — both samples are large enough that the STOI gap (0.91 vs 0.71) is not noise-level variance; it is consistent across the SNR range.
+- **Added 2026-09-04 (Phase 3 T6):** whether a reference-assisted (dual-mic) approach could close this gap
+  was also tested directly, with a realistically-degraded (not oracle) reference channel. It does not —
+  see `progress.md`'s Phase 3 T6 entry and `results/final/target_compliance.md` §5. NLMS's SI-SNR under a
+  realistic reference goes to −2.63 dB on the full non-stationary category (worse than doing nothing),
+  inverting the oracle reference's apparent advantage discussed in Section 5 above.

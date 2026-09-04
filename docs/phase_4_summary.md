@@ -125,3 +125,13 @@ Full compliance matrix: [`results/final/target_compliance.md`](file:///d:/Coding
 **Net effect: the correction makes the results stronger, not weaker.** Impulsive is now the only category that clears all three DRDO targets (SI-SNR, STOI, and PESQ-WB), and the AI/ML-vs-classical contrast on real gunshot/artillery transients is sharper than previously reported (+10.75 dB DeepFilterNet vs. −7.10 dB NLMS, an ~18 dB spread). Stationary and non-stationary numbers throughout Sections 1–4 are unchanged and remain accurate.
 
 Full detail: [`results/final/target_compliance.md`](file:///G:/SIH-2026/defence_anc/results/final/target_compliance.md), [`data/SOURCES.md`](file:///G:/SIH-2026/defence_anc/data/SOURCES.md), `progress.md` (2026-08-24 entry).
+
+> [!NOTE]
+> **Superseded 2026-09-04 (Phase 3, two separate changes — see `progress.md`).** (1) `data/mix_dataset.py`
+> had an unsorted-`glob.glob()` bug making dataset generation non-reproducible; fixing it (and
+> regenerating end to end) reproduced stationary/non-stationary byte-identical to this table but could
+> not reproduce the 2.5841 PESQ-WB draw for impulsive — the honest, reproducible value from the corrected
+> corpus is 2.4916 (FAIL by −0.0084), not 2.5841. (2) Phase 3 T4 then swept `atten_lim_db` and found
+> `atten_lim_db=30` (was 100) closes that gap for real: impulsive PESQ-WB → **2.5428 (PASS)**, and
+> stationary's separate, long-standing PESQ-WB gap closes too (→ 2.5385, PASS). Current source of truth:
+> `results/final/target_compliance.md` (regenerated 2026-09-04, 6 of 9 cells PASS).

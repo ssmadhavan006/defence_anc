@@ -30,18 +30,22 @@ def run_evaluation(
     summary_out: str = "results/results.csv",
     charts_dir: str = "results/charts",
     limit: int = None,
+    extra_methods: list = None,
 ):
     """
     Evaluates all 5 conditions across mixtures in manifest.csv.
     Generates eval_raw.csv, results.csv, and comparison charts.
+    `extra_methods` appends additional method subdirectories under baselines_dir (e.g. a tuned
+    DeepFilterNet variant) without touching the module-level METHODS default used by every other run.
     """
+    methods = METHODS + list(extra_methods) if extra_methods else METHODS
     with open(manifest_path, "r", newline="") as f:
         rows = list(csv.DictReader(f))
 
     if limit is not None and limit < len(rows):
         rows = rows[:limit]
 
-    print(f"=== STARTING EVALUATION ENGINE ({len(rows)} mixtures x {len(METHODS)} methods = {len(rows)*len(METHODS)} target evaluations) ===")
+    print(f"=== STARTING EVALUATION ENGINE ({len(rows)} mixtures x {len(methods)} methods = {len(rows)*len(methods)} target evaluations) ===")
     t0_start = time.time()
 
     raw_eval_rows = []
@@ -100,7 +104,7 @@ def run_evaluation(
             exclusions.append({"mixture_id": mix_id, "method": "noisy", "error": str(e)})
 
     # Second pass: evaluate remaining 4 enhanced methods
-    other_methods = [m for m in METHODS if m != "noisy"]
+    other_methods = [m for m in methods if m != "noisy"]
     for idx, method in enumerate(other_methods, start=2):
         print(f"--- Evaluating Condition {idx}/5: {method.upper()} ---")
         for row in rows:
@@ -158,7 +162,7 @@ def run_evaluation(
 
     total_eval_time = time.time() - t0_start
     print(f"\nEvaluation loop complete in {total_eval_time:.2f}s.")
-    print(f"Total Evaluation Rows: {len(raw_eval_rows)} / {len(rows)*len(METHODS)}")
+    print(f"Total Evaluation Rows: {len(raw_eval_rows)} / {len(rows)*len(methods)}")
     print(f"Total Rule-24 Exclusions Logged: {len(exclusions)}")
 
     # Write results/eval_raw.csv
@@ -273,6 +277,10 @@ if __name__ == "__main__":
     parser.add_argument("--results", default="results/results.csv")
     parser.add_argument("--charts-dir", default="results/charts")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--extra-methods", default=None,
+                         help="Comma-separated extra method subdirs under --baselines-dir to evaluate "
+                              "alongside the standard 5 (e.g. a tuned DeepFilterNet variant), without "
+                              "changing the default METHODS used by every other run.")
     args = parser.parse_args()
 
     run_evaluation(
@@ -281,5 +289,6 @@ if __name__ == "__main__":
         raw_eval_out=args.eval_raw,
         summary_out=args.results,
         charts_dir=args.charts_dir,
-        limit=args.limit
+        limit=args.limit,
+        extra_methods=args.extra_methods.split(",") if args.extra_methods else None,
     )

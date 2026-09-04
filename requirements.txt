@@ -31,3 +31,14 @@ matplotlib>=3.5.0
 # removes numpy as a backtracking axis entirely. 1.26.4 has a prebuilt
 # cp313/aarch64 wheel and is the version the Pi already runs.
 numpy==1.26.4
+
+# Phase 1: reference-NLMS adaptive filter uses numba for the JIT hot loop.
+# Pinned to the exact wheel verified on Pi (cp313/aarch64 exists for 0.67.0).
+# This promotes numba from requirements-optional.txt (where it lived as an
+# optional feature) to a core requirement now that dual-mic is a headline
+# demo feature.  Must coexist with numpy==1.26.4 (confirmed in
+# requirements-optional.txt comments).
+# T0 gate: verify `pip install numba==0.67.0` succeeds on the Pi before
+# running any dual-mic demo.  If it fails, downgrade this to optional and
+# implement a pure-numpy fallback.
+numba==0.67.0

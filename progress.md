@@ -1,12 +1,14 @@
 # Progress Log — PS26052
 
 ## CURRENT STATUS
-- Phase: **5 — COMPLETE** ✅ | Post-Phase-5 hardening COMPLETE ✅ | Latency engineering (P0-2/P0-3) COMPLETE on loopback ✅ | P0-1/P0-4/P0-5 COMPLETE on real hardware ✅ | P1-1/P1-3/P1-4 COMPLETE (dev-verified; P1-3 confirmed non-viable on the Pi's Python 3.13) ✅
-- Last updated: 2026-08-26 (evening)
+- Phase: **5 — COMPLETE** ✅ | Post-Phase-5 hardening COMPLETE ✅ | Latency engineering (P0-2/P0-3) COMPLETE on loopback ✅ | P0-1/P0-4/P0-5 COMPLETE on real hardware ✅ | P1-1/P1-3/P1-4 COMPLETE (dev-verified; P1-3 confirmed non-viable on the Pi's Python 3.13) ✅ | **Phase 2 (latency engineering, phase2_plan.md) Track A COMPLETE dev-verified** ✅ — Track B (Pi hardware) outstanding | **Phase 3 (quality validation, phase3_plan.md) COMPLETE, dev-only, no hardware needed** ✅ — T9 optional live spot-check joins the deferred Pi batch (Track B).
+- Last updated: 2026-09-04
+- Phase 3 (this session): found and fixed a real pre-existing data-integrity bug (`data/mix_dataset.py` unsorted `glob.glob()` made dataset generation non-reproducible; `data/manifest.csv` had drifted from `data/mixtures/` on disk) — full base pipeline regenerated end to end and verified. That regeneration revealed the committed impulsive PESQ-WB (2.5841 PASS) was an unreproducible favorable draw; the honest baseline was 2.4916 (FAIL). Then ran the actual Phase 3 plan: T1-T3 augmented-dataset robustness analysis (NLMS collapses under reverb/clipping, DeepFilterNet degrades gracefully), T4 attenuation sweep (`atten_lim_db=30` closes both the stationary AND impulsive PESQ gaps), T5 spectral-tilt experiment (negative result, dropped, logged per DoD-4), T6 offline dual-mic A/B with a realistically-degraded reference (NLMS's oracle advantage on crowd babble inverts to strongly negative SI-SNR once the reference is realistic — Rule 31 separate track), T7 compliance report regenerated, T8 stale PESQ-availability caveat corrected. **Final: 6 of 9 compliance cells PASS** (up from a true 4/9 baseline this session established; previously-reported "5/9" included the unreproducible draw). `config/audio_config.yaml`'s `model.atten_lim_db` default changed 100→30. Full self-test suite: 17 PASS + 2 correct SKIP, zero regressions (3 new Phase 3 self-tests added). See the six 2026-09-04 "Phase 3" entries below for full evidence.
+- Phase 2 Track A (earlier this session): fixed a real pre-existing bug in `config/audio_config.yaml` (duplicate top-level `audio:`/`pipeline:` blocks meant YAML was silently discarding the first block's keys — see the 2026-09-04 Phase 2 entry below for full detail and Rule 5 implications). Landed `live/latency_budget.py` (A0), fractional `priming_chunks` (A1/D1), startup-underrun tolerance (A2/D2), `live/cpu_affinity.py` (A3/D5), `live/fast_resample.py` (A4/D4), `live/acoustic_latency_test.py` (A5/A6/D3, Rule 30), and dual-mic-aware `scripts/sweep_chunk_size.py` (A7). All new features default-off/behavior-preserving. No latency number has been re-measured on real hardware yet — DoD-1 through DoD-5 all require Track B.
 - What works right now: everything from the previous status entry, plus: **the original headset's mic was found to be physically defective, replaced, and real acoustic content through the live pipeline is now genuinely confirmed** — see the correction entry below; the earlier same-day claim of "confirmed real acoustic input" was written against a mic that turned out to be dead, and is superseded by this entry, not just supplemented by it. With a working headset: mic-verified `demo/spectrogram.py` run shows real dense broadband energy in BEFORE collapsing to a sparse speech-only AFTER (0 dropouts, 0 inference errors, RTF median 0.386). Two resilience fixes shipped: `live/pipeline.py`'s inference loop now survives a single bad chunk instead of silently going deaf (tracks an `Inference errors:` counter), and `live/stress_test.py`'s `pipeline.start()` is now inside its try/finally so a startup failure still cleans up and reports.
-- What's broken / blocked: nothing on the software side. `run_all_selftests.py` remains 9/9 dev-machine / 7 PASS + 2 correct SKIP on the Pi. The device I/O round-trip figure (42.67ms) is still loopback-measured only — the click-based `e2e_latency_test.py` method can't run against physically separate mic/headset hardware, so a true physical round-trip click measurement remains open (not blocking, since real-time streaming stability and audible quality are both now confirmed by other means).
+- What's broken / blocked: nothing on the software side. `run_all_selftests.py` is now 17 PASS + 2 correct SKIP dev-machine (was 9/9 pre-Phase-2/3; 3 new Phase 3 self-tests, 5 Phase 2 self-tests added since). The device I/O round-trip figure (42.67ms) is still loopback-measured only — the click-based `e2e_latency_test.py` method can't run against physically separate mic/headset hardware, so a true physical round-trip click measurement remains open (not blocking, since real-time streaming stability and audible quality are both now confirmed by other means).
 - Waiting on user for: the presentation deck and backup demo video (P1-6) — not hardware-blocked, not started, now the single largest remaining gap. Optionally: a 2-channel USB interface for P1-2 (dual-mic), if time allows.
-- Next immediate action: P0-6 (this doc pass) is done; build the presentation deck and record the backup demo video (P1-6) while the real-hardware setup is proven stable. See `summary/02_NEXT_STEPS_PLAN.md` for the full remaining plan (note: that document and `summary/README.md` predate today's hardware work and are stale on P0-1/P0-4/P0-5 status).
+- Next immediate action: Phase 3 is done. Remaining work is either the deferred Pi hardware batch (Track B for Phase 1/2, plus now T9's optional live dual-mic spot-check) or P1-6 (presentation deck / demo video). See `summary/02_NEXT_STEPS_PLAN.md` for the full remaining plan (note: that document and `summary/README.md` predate today's hardware work and are stale on P0-1/P0-4/P0-5 status).
 
 ### Fixed bugs (found via new unified self-test runner and the dataset-gap investigation)
 1. `models/deepfilternet/run_inference.py::run_self_test()` depended on a stale fixture `data/mixtures/noisy.wav` left over from Phase 1 — that path now holds the real 300-mixture Phase 2 dataset instead, so the self-test either failed outright (file missing) or, via `batch_inference()`'s directory glob, would have silently reprocessed the entire 600-file dataset instead of running a fast isolated smoke check. Also fixed a duplicate-glob bug in `batch_inference()` (both a non-recursive and a recursive glob pattern matched the same top-level files, double-processing every file) — dead code path only reachable from the self-test; the real Phase 3/4 production runs use `process_manifest()` (manifest-driven), which was never affected. Self-test now generates its own synthetic 2 s clip and calls `process_file()` directly. Verified: `uv run python models/deepfilternet/run_inference.py --self-test` passes (RTF=0.2455 on this dev machine).
@@ -401,3 +403,815 @@
 | `progress.md` / `architecture.md` updated with real Pi evidence | ✅ DONE | This log |
 
 > **RTF note (Rule 33):** The target was RTF < 0.25. On Pi 5 in-memory (latency_test), enhance RTF = 0.292. Under live loopback load (stress test), RTF = 0.378. Both are above 0.25 but well below 1.0 (real-time limit). This is reported exactly as measured. With a real USB mic (lower loopback scheduling overhead), live RTF is expected to be closer to the in-memory 0.292 figure. This finding is logged as a real measurement, not hidden or re-parameterised.
+
+---
+
+## 2026-09-04 — Phase 1: Dual-Mic Reference Channel (Software Implementation)
+
+### Hardware topology decision
+
+User confirmed: **Topology B — two separate USB devices** (no stereo interface).
+- Primary mic: 3.5 mm headset mic via USB-A audio dongle (existing `audio.input_device: 1`)
+- Reference mic: dedicated USB microphone (new `audio.dual_mic.reference_device`)
+
+Drift consequence documented: two independent USB crystal clocks drift ~2.4 samples/sec at 50 ppm
+(48 kHz). NLMS filter taps (64 x ~20 us = 1.3 ms window) partially compensate within that window.
+Workflow: calibrate before each demo session, keep sessions <=60 s. Future phase may add periodic
+re-alignment.
+
+### T0 — numba dependency gate (PENDING Pi verification)
+
+`numba==0.67.0` promoted from `requirements-optional.txt` to `requirements.txt`. Justification: dual-mic
+reference-NLMS is a headline demo feature. Wheel cp313/aarch64 previously confirmed to exist. Pi
+verification required: run `pip install numba==0.67.0` on Pi before first dual-mic demo.
+
+### T2 — config/audio_config.yaml — new sections added
+
+Added `audio.dual_mic` and `pipeline.reference_nlms` sections at end of file. Both `enabled: false`
+by default. Existing content and comments untouched. Key new fields:
+- `dual_mic.reference_device: 2` — USB reference mic index
+- `dual_mic.ref_delay_samples: 0` — from calibration
+- `reference_nlms.stage: "post_dfn"` — or "pre_dfn" (config-switchable for Phase 3 comparison)
+
+### T3 — live/reference_nlms.py created (NEW)
+
+Streaming reference-NLMS filter. numba-JIT kernel `_nlms_chunk` matches `baselines/nlms/nlms.py`
+equation (Widrow NLMS, L-1 zero pre-pad, returns error signal as speech estimate). `ReferenceNLMSFilter`
+class with `process_chunk(primary, reference)`, `erle_db()`, `reset()`. Lazy-import via `start()`.
+JIT warmup at construction.
+
+Self-test (Mode A, dev machine, 2026-09-04):
+
+    uv run --no-sync python live/reference_nlms.py --self-test
+    [PASS] test 1: chunked streaming matches offline batch (bit-identical)
+    [PASS] test 2: shape=(48000,), all finite
+    [PASS] test 3: silence handled without divide-by-zero
+    [PASS] test 4: NLMS improves speech correlation (0.763 -> 0.992)
+    [PASS] test 5: ERLE=2.23 dB (positive = noise reduction is occurring)
+    [PASS] test 6: reset() clears weights, history, and ERLE accumulators
+    [PASS] test 7: invalid parameters raise ValueError
+    [PASS] test 8: mismatched input shapes raise ValueError
+    live/reference_nlms.py self-test -- ALL PASSED
+
+Test 1 confirms FR-5 (chunk-streaming bit-identical to offline batch).
+Test 4: speech correlation improved 0.763 -> 0.992 with oracle reference input.
+ERLE 2.23 dB on 1 s synthetic signal (includes pre-convergence transient).
+
+### T4 — live/pipeline.py updated (dual-mic Topology B)
+
+Changes gated behind `dual_mic.enabled: false` default. Single-mic path is behaviourally identical
+when disabled (no second stream opened, no numba import attempted).
+
+- `__init__`: parse `dual_mic` + `reference_nlms` config. Create `_ref_buf` (single-channel RingBuffer)
+  and `_ref_delay_line` (numpy array for integer delay compensation) when enabled. Validate
+  `reference_nlms.enabled` requires `dual_mic.enabled`.
+- `_ref_callback()`: new method. Writes reference mic audio to `_ref_buf` (with resample if needed).
+- `_ref_stream_sr` attribute: resolved in `start()` via existing `_resolve_stream_samplerate`.
+- `start()`: lazy-import `ReferenceNLMSFilter` when enabled (same pattern as `ResidualALEFilter`).
+  Open `_stream_ref` (sd.InputStream, channels=1) when `dual_mic.enabled`.
+- Inference loop: reads `ref_chunk` from `_ref_buf`; applies integer delay via `_ref_delay_line`.
+  Pre-DFN stage: before `enhance_chunk`. Post-DFN stage: after existing ALE hook.
+- `stop()`: closes `_stream_ref` when open.
+- `_print_stats()`: adds reference buffer overflow, `ref_delay_samples`, and ERLE lines.
+
+### T5 — live/calibrate_mic_pair.py created (NEW)
+
+Cross-correlation mic pair delay calibration. Plays log-chirp 200-6000 Hz while recording both mics,
+cross-correlates to find integer delay, writes `config/mic_calibration.yaml`. Accessible via
+`python live/main.py calibrate`. Pure numpy xcorr — no scipy dependency.
+
+Self-test (Mode A, dev machine, 2026-09-04):
+
+    uv run --no-sync python live/calibrate_mic_pair.py --self-test
+    [PASS] test 1: chirp shape=(96000,), max_amp=0.250
+    [PASS] test 2: compute_delay found lag=120 (expected ~120)
+    [PASS] test 3: silent input handled gracefully (lag=0)
+    [PASS] test 4: calibration YAML written and verifiable
+    live/calibrate_mic_pair.py self-test -- ALL PASSED
+
+Test 2: synthetic 120-sample (2.5 ms) delay recovered correctly.
+
+### T6 — live/detect_devices.py updated
+
+Emits paste-ready `dual_mic:` config block when >=2 USB input devices found. Suggests first as
+primary (already set as `input_device`), second as `reference_device`.
+
+### T7 — live/main.py updated
+
+Added `calibrate` subcommand routing to `live.calibrate_mic_pair.main`.
+
+### T9 — requirements.txt updated
+
+Added `numba==0.67.0` with T0 Pi verification gate note.
+
+### T10 — scripts/run_all_selftests.py updated
+
+Added `reference_nlms` (optional_dep="numba") and `calibrate_mic_pair` (optional_dep=None) entries.
+
+### Full Mode A regression suite (dev machine, 2026-09-04)
+
+    uv run --no-sync python scripts/run_all_selftests.py --skip-dfn
+
+    [PASS] ring_buffer            0.26s
+    [PASS] spectrogram_demo       0.17s
+    [PASS] e2e_latency_logic      0.17s
+    [PASS] augment                2.64s
+    [PASS] residual_filter        0.88s
+    [PASS] reference_nlms         2.67s
+    [PASS] calibrate_mic_pair     1.75s
+    ALL MODE A SELF-TESTS PASSED
+
+Zero regressions in existing tests. Two new tests added and passing.
+Machine: dev machine (Windows 11, x86_64, Python 3.9 via uv venv). NOT Pi results (Rule 5).
+
+### Pending Mode B tests (require Pi + hardware)
+
+| Condition | Command | Output to paste |
+|---|---|---|
+| T0: numba installs on Pi | `pip install numba==0.67.0` | Install log |
+| DoD-1: calibration runs on Pi | `python live/main.py calibrate` | Measured ref_delay_samples |
+| DoD-3: dual-mic 10-min stress | `python live/main.py stress --duration 600` with dual_mic.enabled:true | results/stress_dualmic.json |
+| DoD-4: single-mic regression | existing stress_test_report.json | Already PASS (single-mic path unchanged) |
+| DoD-5: live A/B demo | enable/disable reference_nlms from config | Pasted Pi session |
+| **Phase 2 / B0**: re-baseline on real dual-USB hardware | `live/latency_test.py` + `live/e2e_latency_test.py` per phase2_plan.md §5.B0 | `results/latency_inference_dualmic.json`, `results/latency_baseline_dualmic.json` |
+| **Phase 2 / B1**: priming validation (1.0→0.5→0.25→0.0) | `python live/main.py stress --duration 600` per priming value | `results/stress_priming.json`, chosen value + reasoning |
+| **Phase 2 / B2**: chunk-size sweep, dual-mic, re-test 50ms | `python scripts/sweep_chunk_size.py --dual-mic --priming-chunks <chosen>` | `results/chunk_sweep_report.json` |
+| **Phase 2 / B3**: core-pinning A/B | `pipeline.cpu_affinity` set vs `null`, 300s each, `taskset -pc <pid>` to verify | Both arms' RTF p95/dropouts, keep/drop decision |
+| **Phase 2 / B4**: fast_resample A/B | `pipeline.fast_resample` true vs false, Pi microbenchmark | Both arms' timings, keep/drop decision |
+| **Phase 2 / B5**: physical acoustic round-trip (headline measurement) | `python live/main.py acoustic-latency --n-reps 20` | `results/acoustic_latency.json`, median + p95 |
+| **Phase 2 / B6**: empirical DFN3 lookahead | `python live/main.py acoustic-latency --lookahead` | `results/lookahead_measured.json` |
+| **Phase 2 / B7**: final gate at chosen configuration | `python live/main.py stress --duration 600` | `results/stress_dualmic_final.json` verdict PASS |
+| **Phase 2 / B8**: claim reconciliation | update README.md/architecture.md/audio_config.yaml comments to measured values | progress.md closing entry, machines named |
+| **Phase 3 / T9** (optional, not a Phase 3 gate): live dual-mic spot-check | once dual-mic hardware is set up (Phase 1/2 Track B), check whether live crowd-babble behaviour falls between the T6 `nlms_realistic` and `nlms_oracle_upper_bound` predictions | Pasted Pi session; closes the `phase3_plan.md` §1.2 loop with a real measurement |
+
+## 2026-09-04 — Phase 2 Track A: latency engineering, dev-machine work (`phase2_plan.md`)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv, Python 3.12)
+**Track:** A (dev machine, Mode A — no hardware)
+
+### Bug found and fixed first: config/audio_config.yaml duplicate top-level keys
+
+While implementing A7 (propagate `dual_mic`/`reference_nlms` into `scripts/sweep_chunk_size.py`'s
+scratch configs), found that `config/audio_config.yaml` declared TWO top-level `audio:` blocks and TWO
+top-level `pipeline:` blocks — the Phase 1 dual-mic/reference-NLMS sections had been appended as new
+top-level keys instead of nested under the existing ones. YAML mappings silently collapse duplicate
+keys to the LAST one seen, so `yaml.safe_load` was discarding `sample_rate`, `chunk_duration_sec`,
+`input_device: 1`, `output_device: 0`, `priming_chunks`, etc. from the first blocks, keeping only
+`dual_mic`/`reference_nlms`. `live/pipeline.py`'s `_load_config` deep-merge then silently fell back to
+its own hard-coded defaults for every dropped key (`input_device`/`output_device` became `None`,
+triggering auto-detection instead of the documented real Generalplus indices).
+
+Evidence (before fix):
+
+    python -c "
+    import yaml
+    with open('config/audio_config.yaml', encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+    print('audio:', cfg['audio'])
+    print('pipeline keys:', list(cfg['pipeline'].keys()))
+    "
+    audio: {'dual_mic': {'enabled': False, 'reference_device': 2, 'ref_delay_samples': 0, 'topology': 'dual_usb'}}
+    pipeline keys: ['reference_nlms']
+
+Fixed by merging into single `audio:`/`pipeline:` blocks (dual_mic/reference_nlms now nested correctly
+inside them, all comments preserved). Evidence (after fix):
+
+    audio: {'sample_rate': 48000, 'channels': 1, 'chunk_duration_sec': 0.1, 'ring_buffer_duration_sec': 2.0,
+             'input_device': 1, 'output_device': 0, 'dual_mic': {'enabled': False, 'reference_device': 2,
+             'ref_delay_samples': 0, 'topology': 'dual_usb'}}
+    pipeline: {'mode': 'enhance', 'log_timing': False, 'latency_warn_sec': 0.3, 'warmup_passes': 3,
+               'priming_chunks': 1.0, 'startup_grace_sec': 0.5, 'cpu_affinity': None, 'fast_resample': False,
+               'residual_filter': False, 'inference_backend': 'pytorch', 'onnx_dir': 'results/onnx',
+               'reference_nlms': {'enabled': False, 'filter_length': 64, 'mu': 0.01, 'eps': 1e-06, 'stage': 'post_dfn'}}
+
+**Rule 5/33 implication:** every real-hardware run to date that relied on the config file's explicit
+`input_device`/`output_device` was actually running on auto-detected devices instead — auto-detection
+happened to pick the right hardware, which is why this went unnoticed, not because the config was being
+honored. Not re-litigating past results (auto-detection working is not itself a defect), but noting it
+plainly per Rule 33 rather than letting it pass silently.
+
+### What changed
+
+- `config/audio_config.yaml` — merged duplicate top-level blocks (bug fix above); added Phase 2 keys
+  (`priming_chunks` now float, `startup_grace_sec`, `cpu_affinity`, `fast_resample`) with rationale
+  comments and default values matching pre-Phase-2 behaviour.
+- `live/latency_budget.py` (NEW, A0) — `LatencyBudget` dataclass: per-component `source` tag
+  (measured/estimated/configured), mandatory `machine` field (Rule 5), `total_estimate_ms`,
+  `is_mixed_source()`, JSON round-trip, `render_table()`.
+- `live/pipeline.py` (A1/A2/A3/A4) —
+  - `_compute_priming_samples()` / `_classify_underrun()`: pure helper functions, unit-testable without
+    hardware.
+  - `priming_chunks` parsed as `float` (was `int`); priming write is now a single
+    `round(priming_chunks * chunk_samples)`-sample write instead of a whole-chunk loop (`1.0` is
+    byte-identical to the old behaviour: `round(1.0 * chunk_samples) == chunk_samples`). Negative values
+    raise `ValueError`.
+  - `_startup_underruns` counter + `startup_grace_sec` config; `_output_callback` now buckets every
+    underrun as teardown/startup/real via `_classify_underrun()`; `_print_stats` reports all three.
+  - `_stream_start_t` recorded right after streams start, used as t=0 for the grace window.
+  - `set_thread_affinity()` (from `live/cpu_affinity.py`) called at the top of `_inference_loop`, guarded
+    on `self._cpu_affinity is not None`.
+  - `_resample_multi()` takes a `use_fast` flag; routes to `live/fast_resample.py::resample_fast` when
+    `pipeline.fast_resample` is enabled. `start()` raises a clear `RuntimeError` up front if enabled
+    without numba installed (fails before any hardware is touched, not mid-callback).
+  - Added `--self-test` CLI flag exercising the above pure logic (no sounddevice/model needed).
+- `live/cpu_affinity.py` (NEW, A3) — `set_thread_affinity(cores)`: pid=0 `os.sched_setaffinity` (pins the
+  calling thread only, per phase2_plan.md §3.1(b)); graceful `False` (never raises) when unsupported.
+- `live/fast_resample.py` (NEW, A4) — numba-JIT drop-in for `pipeline.py::_resample`; importable without
+  numba (degrades gracefully for `run_all_selftests.py`'s SKIP mechanism), raises only if actually called
+  without numba installed.
+- `live/acoustic_latency_test.py` (NEW, A5/A6) — `measure_click_to_click_lag()` / `_find_peak_sample()`
+  (D3's dual-mic method, reusing `find_click_lag`'s peak/noise-floor/RuntimeError discipline from
+  `live/e2e_latency_test.py`), `record_synced()` (mirrors `calibrate_mic_pair.py::record_both`),
+  `run_acoustic_latency_test()` (Mode B orchestration), `measure_model_lookahead()` +
+  `run_lookahead_measurement()` (Rule 30 — empirical, never read from `df.config`). Registered as
+  `python live/main.py acoustic-latency` (`live/main.py` updated).
+- `scripts/sweep_chunk_size.py` (A7) — `_make_scratch_config()` / `run_one_candidate()` take optional
+  `priming_chunks`/`dual_mic`/`reference_nlms` overrides; `main()` gained `--priming-chunks`,
+  `--dual-mic`/`--no-dual-mic`, `--reference-nlms`/`--no-reference-nlms`; summary table gained
+  `Priming` and `StartupUR` columns.
+- `live/stress_test.py` (A2) — reports `startup_underruns` in the printed summary and the JSON output
+  (excluded from the PASS/FAIL verdict, same as `teardown_underruns` already was).
+- `scripts/run_all_selftests.py` — registered `latency_budget`, `pipeline_logic`, `cpu_affinity`,
+  `fast_resample` (optional_dep="numba"), `acoustic_latency_logic`.
+- `architecture.md` — component table + folder structure updated for the 4 new modules (Rule 7: done
+  before, in the same change as, landing the modules); decisions log entry added.
+
+### Evidence
+
+    uv run --no-sync python live/latency_budget.py
+    live/latency_budget.py self-test -- start
+      [PASS] test 1: total_estimate_ms == 172.17000000000002 (sum of components)
+      [PASS] test 2: mixed-source budget flags itself in render_table()
+      [PASS] test 3: uniform-source budget does not flag itself
+      [PASS] test 4: to_json()/from_json() round-trip is exact
+      [PASS] test 5: unknown machine/source values raise ValueError
+      [PASS] test 6: measured_physical_ms stays None until filled in, then renders
+    live/latency_budget.py self-test -- ALL PASSED
+
+    uv run --no-sync python live/pipeline.py --self-test
+    live/pipeline.py self-test -- start
+      [PASS] test 1: priming_chunks=1.0 -> 4800 samples (identical to old int-loop behaviour)
+      [PASS] test 2: priming_chunks=0.5 -> 2400 samples, 0.25 -> 1200 samples, 0.0 -> 0 samples
+      [PASS] test 3: negative priming_chunks raises ValueError
+      [PASS] test 4: not-running underruns always classify as teardown
+      [PASS] test 5: running underruns classify as startup within the grace window, real once past it
+             (verdict is unaffected by in-window ones, fails on out-of-window ones)
+    live/pipeline.py self-test -- ALL PASSED
+
+    uv run --no-sync python live/cpu_affinity.py --self-test
+    [cpu_affinity] os.sched_setaffinity is not available on this platform (win32); skipping pin to
+    cores=[0]. This is expected on Windows/macOS and is not an error.
+    live/cpu_affinity.py self-test -- start
+      [PASS] test 1: cores=None is a no-op returning True
+      [PASS] test 2: graceful no-op on Windows (no os.sched_setaffinity) -- did not raise
+    live/cpu_affinity.py self-test -- ALL PASSED
+
+    uv run --no-sync python live/fast_resample.py --self-test
+      [PASS] 44100 Hz -> 48000 Hz: bit-equivalent (max diff=0.00e+00)
+      [PASS] 16000 Hz -> 48000 Hz: bit-equivalent (max diff=0.00e+00)
+      [PASS] 48000 Hz -> 48000 Hz: bit-equivalent (max diff=0.00e+00)
+      Microbenchmark (THIS MACHINE ONLY, not a Pi measurement -- Rule 5): np.interp=43.4 us/call, numba=15.5 us/call
+    live/fast_resample.py self-test -- ALL PASSED
+
+    uv run --no-sync python live/acoustic_latency_test.py --self-test
+    live/acoustic_latency_test.py self-test -- start
+      [PASS] test 1: measure_click_to_click_lag recovers known lag (expected ~960, got 960)
+      [PASS] test 2: measure_click_to_click_lag raises RuntimeError when no click is present on either
+             channel (no silent wrong answers)
+      [PASS] test 3: raises specifically naming the channel with no clean click
+      [PASS] test 4: measure_model_lookahead recovers known shifts (0, 5, 40 samples) via a fake engine,
+             no DFN3 model needed
+      [PASS] test 5: _load_calibration_offset defaults to 0 (with a warning) when uncalibrated
+    live/acoustic_latency_test.py self-test -- ALL PASSED
+
+Full regression suite (all tests, not `--skip-dfn` — includes DFN3 model-loading tests):
+
+    uv run --no-sync python scripts/run_all_selftests.py
+      [PASS] ring_buffer            0.27s
+      [PASS] inference_engine       1.63s
+      [PASS] run_inference          1.50s
+      [PASS] spectrogram_demo       0.17s
+      [PASS] e2e_latency_logic      0.17s
+      [PASS] augment                0.48s
+      [PASS] residual_filter        0.89s
+      [PASS] reference_nlms         2.69s
+      [PASS] calibrate_mic_pair     1.74s
+      [PASS] latency_budget         0.07s
+      [PASS] pipeline_logic         1.52s
+      [PASS] cpu_affinity           0.08s
+      [PASS] fast_resample          1.79s
+      [PASS] acoustic_latency_logic   0.17s
+      [SKIP] export_onnx            0.00s (optional dependency 'onnxscript' not installed)
+      [SKIP] onnx_infer             0.00s (optional dependency 'onnxscript' not installed)
+    ALL MODE A SELF-TESTS PASSED (Mode B / Pi hardware tests not included)
+
+14/14 runnable tests PASS, 2 correctly SKIP (unrelated optional ONNX dependency, pre-existing condition).
+**Zero regressions** in the 10 pre-existing tests; 5 new tests added and passing.
+Machine: devmachine (Windows 11, x86_64, uv venv). NOT Pi results (Rule 5).
+
+Also confirmed numba IS installed in this dev venv, so `fast_resample`'s bit-equivalence check and
+microbenchmark ran for real (not skipped) — max diff 0.00e+00 (exact bit-equivalence, stronger than the
+atol=1e-4 tolerance the test allows for) across all three tested rate pairs, and numba measured ~2.8x
+faster than `np.interp` in this local microbenchmark. This is a dev-machine-only number (Rule 5) and is
+NOT the basis for keeping `fast_resample` — that decision is made on the Pi (B4), per D4's
+measure-first/keep-only-if-it-helps policy, since np.interp is already compiled C and this machine's ISA
+differs from the Pi's ARM Cortex-A76.
+
+### Result
+
+**PASS.** Gate A (dev machine) from `phase2_plan.md` §10 is met: A0–A8 implemented, `architecture.md`
+updated in the same change, full self-test suite green with zero regressions, A3 verified no-op on
+Windows, A4 bit-equivalence proven, and every default-off feature confirmed behavior-preserving at its
+default (`priming_chunks: 1.0`, `cpu_affinity: null`, `fast_resample: false`).
+
+**Not done / explicitly deferred (Rule 33 — stating the gap, not hiding it):** No latency number in this
+entry is a real measurement — `LatencyBudget`, the priming/underrun logic, and the acoustic-latency math
+are all verified against synthetic/pure-logic self-tests, not real audio hardware. DoD-1 through DoD-5 in
+`phase2_plan.md` all require Track B (Pi hardware, B0–B8), which is unstarted and queued behind Phase 1's
+own outstanding Track B per the project's established working order (Mode A/dev-machine work first, all
+Pi work batched at the end). The sub-150ms latency target itself has not been evaluated against any real
+number yet — Track B's B0 re-baseline is the first step that can even ask that question honestly.
+
+---
+
+## 2026-09-04 — Phase 3 prerequisite: manifest/disk integrity bug found and fixed
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** clean 300 (base, non-augmented)
+
+### What changed
+- `data/mix_dataset.py:143,156` — wrapped the clean-speech and per-subtype noise-pool `glob.glob()` calls
+  in `sorted()`. Root cause of the bug below: unsorted glob order makes `random.choice()` draws depend on
+  filesystem enumeration order, not just the seed, so `mix_dataset.py` was not actually reproducible run
+  to run despite the fixed `seed=42` default.
+- `data/manifest.csv`, `data/mixtures/*` — fully regenerated.
+- `results/baselines/{spectral_subtraction,wiener,nlms,deepfilternet}/*` — fully regenerated (old outputs
+  moved to `_pre_regen_backup_20260904_195252/` first, not deleted).
+- `results/eval_raw.csv`, `results/results.csv`, `results/charts/*` — fully regenerated.
+
+### Why (Rule 27 root cause)
+Before touching anything, I verified the ground truth `phase3_plan.md` was written against: `data/manifest.csv`
+(committed, unmodified in git) referenced 34 rows in the `impulsive` category (indices ~0201–0295) whose
+`subtype` field did not match the file actually present on disk at that index (e.g. manifest said
+`mix_impulsive_explosion_-5dB_0212.wav`, disk had `mix_impulsive_artillery_-5dB_0212.wav`). Cross-checked
+`results/eval_raw.csv` and `results/baseline_manifest.csv` — both agreed with **disk**, not with
+`data/manifest.csv`. So only the committed manifest had drifted; mixtures/baselines/eval were already
+mutually consistent with each other, just not with the manifest.
+
+Evidence (verbatim):
+```
+$ python scripts/scratch_check_manifest_integrity.py   # ad hoc, deleted after use
+manifest rows: 300
+files on disk: 602
+missing files referenced by manifest: 34
+orphan files on disk (not in manifest): 36
+```
+
+### Row-count / exclusion integrity   [Rules 24/26]
+Post-fix, verified programmatically:
+```
+manifest rows: 300
+missing: 0
+wav files on disk: 600
+orphans: 0
+```
+Baselines: `Generated results/baseline_manifest.csv with 900 rows (300 mixtures x 3 methods)` — all 3
+methods 300/300 sanity-check PASS. DeepFilterNet: `300 processed, 0 skipped`. Eval:
+`Total Evaluation Rows: 1500 / 1500`, `Total Rule-24 Exclusions Logged: 0`.
+
+### Unexpected consequence — impulsive PESQ_WB no longer reproducibly passes
+Regenerating reproduced `stationary` and `non_stationary` category means **byte-identical** to the
+currently-committed `results/final/target_compliance.json` (both categories' noise pools were never
+touched by the historical gunshot/artillery gap, so this is exactly the expected/reassuring result).
+`impulsive` did not reproduce: the committed compliance report cites PESQ_WB=2.5841 (PASS) for
+impulsive/DeepFilterNet, but the freshly-regenerated, now-verified-consistent, now-actually-reproducible
+run gives:
+
+| Metric | Committed (2026-08-24) | Regenerated (this entry, reproducible) |
+|---|---|---|
+| SI-SNR | 15.7495 dB | 15.1950 dB (still PASS, >15) |
+| STOI | 0.9319 | 0.9196 (still PASS, >0.85) |
+| PESQ-WB | 2.5841 (PASS) | **2.4916 (FAIL, -0.0084 vs 2.5 target)** |
+
+Root cause: the 2.5841 figure was itself a product of the same glob-order non-determinism — a favorable
+random draw over the gunshot/artillery/explosion pool that the pre-fix code could not reliably reproduce.
+It was never fabricated (Rule 1) — it came from a real `eval/run_eval.py` run at the time — but it was
+not the reproducible steady-state of the corpus, and nothing on disk since has matched it. Subtype
+composition this run: `{explosion: 40, artillery: 34, gunshot: 26}`, close to the documented 40/35/25
+split, confirming the full corrected corpus (not an explosion-only regression) is what's being drawn from.
+
+**True current compliance state is 4/9, not the 5/9 `phase3_plan.md` was written against**: impulsive
+PESQ_WB joins stationary PESQ_WB and all three non_stationary cells as FAIL. SI-SNR and STOI are unaffected
+(both categories still comfortably PASS both). `results/final/target_compliance.md/.json` regenerated in
+place accordingly (previous version preserved via git history + an explicit superseding note, per existing
+project practice — not deleted).
+
+**Consequence for Phase 3's D1 target:** still realistic. Impulsive's new PESQ gap (-0.0084) is smaller
+than stationary's long-standing gap (-0.018) — `phase3_plan.md` §1.1's non-stationary arithmetic is
+completely unaffected (built on non_stationary numbers, which are byte-identical pre/post this fix), so
+6/9 remains the target, now achievable via closing either or both of two small, closeable PESQ gaps
+instead of one.
+
+### Result
+**PASS** — integrity restored and verified programmatically; root cause fixed at the source
+(`sorted()` on the glob calls, so this cannot silently recur). Compliance report regenerated to match
+reality. Phase 3 proper (T0 onward) now proceeds against a verified-consistent base.
+
+---
+
+## 2026-09-04 — Phase 3 T0: Pilot timing gate (Rule 19)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** 15-file augmented pilot (`--count 10` rounds up to 15 across 15 category/subtype/SNR combos),
+`--augment-rir --augment-clipping`, generated to scratch paths and deleted after timing capture.
+
+### Evidence (verbatim timings)
+| Stage | Pilot (15 files / 75 eval rows) | Extrapolated to full 300 / 1500 |
+|---|---|---|
+| `mix_dataset.py --augment-rir --augment-clipping` | 1.76s | ~35s |
+| 3 classical baselines (spectral_subtraction, wiener, nlms) | 2.55s | ~51s |
+| DeepFilterNet3 inference | 2.77s | ~55s |
+| `eval/run_eval.py` (75 rows) | 19.92s (19.92s eval-loop-only + ~5s startup) | ~398s (~6.6 min) |
+| **Total pipeline** | ~27s | **~539s (~9 min)** |
+
+Also cross-checked against this session's real (non-pilot) full clean-300 run a few minutes earlier:
+mix=4.85s, baselines=63.56s, DFN3=51.81s, eval=160.90s (~4.7 min total) — same order of magnitude,
+augmented adds modest overhead from RIR convolution as expected.
+
+### Decision this timing drove
+All of T1–T2 (augmented full run) and T4 (Stage-1 stratified sweep, ~600 DFN3 calls extrapolated to
+~175s) stay well under the plan's ~2h backgrounding threshold. **Decision: run all Phase 3 stages
+directly/synchronously in-session, no backgrounding or checkpointing needed.**
+
+### Incident during piloting (self-caught, no data lost)
+First DFN3 pilot invocation omitted `--output-dir`/`-o`, which defaults to the real production path
+`results/baselines/deepfilternet/`. It wrote 14 stray files there (idempotent skip-if-exists meant the
+1 filename that collided with a real production row was left untouched, so no real output was corrupted
+— only 14 extra orphan files were added.) Caught immediately by comparing pilot manifest filenames
+against `data/manifest.csv`; all 14 identified and removed; verified `results/baselines/deepfilternet/`
+back to exactly 300 files, and the 1 untouched file's mtime confirmed unchanged from this session's
+earlier real regeneration. Re-ran the pilot correctly with `-o` pointed at a scratch dir.
+
+### Result
+**PASS.** Proceeding to T1 (augmented dataset generation, full 300).
+
+---
+
+## 2026-09-04 — Phase 3 T1–T3: Augmented dataset, full run, robustness doc
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** augmented 300 (`--augment-rir --augment-clipping`)
+
+### What changed
+- `data/manifest_augmented.csv`, `data/mixtures_augmented/` — new, generated (does not touch the clean set).
+- `results/baselines_augmented/{spectral_subtraction,wiener,nlms,deepfilternet}/` — new.
+- `results/eval_raw_augmented.csv`, `results/results_augmented.csv`, `results/charts_augmented/` — new.
+- `docs/augmentation_robustness.md` — new (DoD-1).
+
+### Evidence (verbatim)
+```
+$ uv run python data/mix_dataset.py --output-dir data/mixtures_augmented \
+    --manifest data/manifest_augmented.csv --augment-rir --augment-clipping
+Total Mixtures Generated: 300
+Manifest Row Count Verified: 300 == 300 mix files, 300 clean ref files
+Audio Sample Rate: 48000 Hz (All verified)
+Achieved SNR Mean Deviation: 0.0000 dB | Max Deviation: 0.0000 dB
+Augmentation - Reverb: applied (per-category room presets)
+Augmentation - Clipping: applied (per-category intensity)
+real 0m13.146s
+```
+Independent post-hoc integrity check (Rules 14/26): manifest rows=300, wav files on disk=600, missing=0,
+orphans=0, non-48kHz files=0.
+
+```
+$ classical baselines (spectral_subtraction, wiener, nlms) over data/manifest_augmented.csv
+spectral_subtraction: 300   wiener: 300   nlms: 300
+real 1m13.194s
+
+$ uv run python models/deepfilternet/run_inference.py --manifest data/manifest_augmented.csv \
+    --output-dir results/baselines_augmented/deepfilternet
+DeepFilterNet processing finished in 102.58s (0 skipped, 300 processed).
+real 1m44.265s
+
+$ uv run python eval/run_eval.py --manifest data/manifest_augmented.csv \
+    --baselines-dir results/baselines_augmented --eval-raw results/eval_raw_augmented.csv \
+    --results results/results_augmented.csv --charts-dir results/charts_augmented
+Evaluation loop complete in 170.80s.
+Total Evaluation Rows: 1500 / 1500
+Total Rule-24 Exclusions Logged: 0
+real 2m54.227s
+```
+
+### Row-count / exclusion integrity
+Expected rows: 1500   Actual: 1500   Exclusions: 0
+
+### Robustness finding (T3, DoD-1 — see `docs/augmentation_robustness.md` for full table + narrative)
+NLMS collapses under augmentation in every category (ΔSI-SNR −5.37 / −4.29 / −4.08 dB stationary /
+non_stationary / impulsive — the largest degradation of any method, and on two of three categories its
+post-augmentation mean SI-SNR falls *below* the unprocessed noisy baseline). Root cause: reverb + clipping
+both directly attack the one thing NLMS's oracle reference channel assumes (a faithful, undistorted,
+sample-aligned noise reference) — independent confirmation of `phase3_plan.md` §1.2's point that NLMS's
+clean-eval advantage should not be extrapolated to real dual-mic conditions. DeepFilterNet3 degrades far
+more gracefully everywhere (worst case: impulsive, ΔSI-SNR −3.15 dB, still well short of NLMS's −4.08 dB
+in the same category) and does not degrade at all on non-stationary (ΔSI-SNR **+0.19 dB**, ΔSTOI **+0.019**,
+both positive). Classical spectral methods (spectral subtraction, Wiener) are the most robust of all,
+consistent with having no learned prior to fall outside of and no fragile second-channel reference to break.
+
+### Result
+**PASS.** DoD-1 met. Proceeding to T4 (attenuation + post-filter sweep).
+
+---
+
+## 2026-09-04 — Phase 3 T4 Stage 1: atten_lim_db x post_filter sweep (stratified subset)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** stratified subset of `data/manifest.csv` — 20 mixtures/category (4 per SNR level x 5 levels),
+seed=42, deterministic (self-tested).
+
+### What changed
+- `scripts/sweep_atten_lim.py` — new (DoD-3). Self-test registered in `scripts/run_all_selftests.py`.
+- `results/atten_sweep.csv` — new. `results/atten_sweep_outputs/` — new (does not touch
+  `results/baselines/deepfilternet/`, per plan constraint).
+
+### Evidence
+```
+$ uv run python scripts/sweep_atten_lim.py --self-test
+  [PASS] test 1: stratified subset shape + determinism (real manifest)
+  [PASS] test 2: select_optima enforces the pre-committed no-regression rule
+sweep_atten_lim self-test -- ALL PASSED
+
+$ uv run python scripts/sweep_atten_lim.py     # grid: atten in {30,50,70,85,100} x post_filter in {off,on}
+  (10 grid points x 3 categories x 20 files = 600 DeepFilterNet inferences)
+real 2m32.662s
+```
+Full grid in `results/atten_sweep.csv`. Summary (PESQ-WB / STOI / SI-SNR, n=20 per row):
+
+| Category | atten=30/off | atten=100/off (closest to committed default, `atten_lim_db: 100`) | Δ (30 vs 100) |
+|---|---|---|---|
+| stationary | 2.5023 / 0.8961 / 15.377 | 2.4217 / 0.8983 / 15.378 | PESQ +0.081, STOI −0.0022, SI-SNR ~0 |
+| non_stationary | 2.1371 / 0.8421 / 11.355 | 2.0552 / 0.8413 / 11.297 | PESQ +0.082, STOI +0.0008, SI-SNR +0.06 |
+| impulsive | 2.6299 / 0.9232 / 15.609 | 2.5805 / 0.9240 / 15.581 | PESQ +0.049, STOI −0.0008, SI-SNR +0.03 |
+
+### Selection-rule note (methodology deviation, disclosed)
+`phase3_plan.md` T4 states the selection rule as "maximise PESQ subject to STOI/SI-SNR not regressing
+more than 0.005/0.1dB **against the current committed values**" — but the committed values are 100-file
+full-category means, while Stage 1 runs on a 20-file stratified subset. Comparing a 20-file subset mean
+directly against a 100-file mean confounds subset-sampling noise with the atten_lim_db effect (e.g.
+`atten=100/off`, which is effectively the current committed default, already differs from the committed
+STOI by up to 0.02 on this subset alone). **Applied the rule intra-subset instead**: compared every grid
+point against `atten=100/post_filter=off` (the grid point equal to the current default, run on the *same*
+20-file subset), which isolates the atten_lim_db/post_filter effect from subset-sampling noise. The strict
+committed-value regression check is deferred to Stage 2, where it is a fair full-300-vs-full-300 comparison.
+
+### Result
+**Clean, consistent finding across all three categories: `atten_lim_db=30, post_filter=off` maximises
+PESQ in every category** (+0.05 to +0.08 PESQ vs. the current default), with STOI/SI-SNR flat to
+slightly improved relative to the atten=100 in-subset baseline (largest regression: stationary STOI
+−0.0022, well inside the 0.005 tolerance). **`post_filter=on` uniformly hurts PESQ, STOI, and SI-SNR in
+every category** (e.g. stationary PESQ 2.50→2.09 at atten=50) — a clean negative result, logged per
+DoD-4 (kept in `results/atten_sweep.csv`, not deleted). Proceeding to Stage 2: confirm `atten_lim_db=30`
+(post_filter stays off) on the full 300-file set and apply the real committed-value regression check there.
+
+---
+
+## 2026-09-04 — Phase 3 T4 Stage 2: full-300 confirmation of atten_lim_db=30 — closes 2 PESQ gaps
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** clean 300 (full set, not the stratified subset)
+
+### What changed
+- `eval/run_eval.py` — added an `extra_methods` param / `--extra-methods` CLI flag so a tuned variant can
+  be evaluated alongside the standard 5 without changing the module-level `METHODS` default every other
+  run (including the augmented-set run earlier this session) depends on. Minimal, additive, opt-in.
+- `results/baselines/deepfilternet_tuned/` — new (300 files, `atten_lim_db=30`). **Does not overwrite**
+  `results/baselines/deepfilternet/` (separate directory, per plan constraint).
+- `results/eval_raw_tuned_confirm.csv`, `results/results_tuned_confirm.csv`,
+  `results/charts_tuned_confirm/` — new, scratch/confirmation outputs (not the committed eval_raw.csv).
+
+### Evidence (verbatim)
+```
+$ uv run python models/deepfilternet/run_inference.py --manifest data/manifest.csv \
+    --output-dir results/baselines/deepfilternet_tuned --atten-lim 30
+DeepFilterNet processing finished in 52.28s (0 skipped, 300 processed).
+
+$ uv run python eval/run_eval.py --manifest data/manifest.csv --baselines-dir results/baselines \
+    --eval-raw results/eval_raw_tuned_confirm.csv --results results/results_tuned_confirm.csv \
+    --charts-dir results/charts_tuned_confirm --extra-methods deepfilternet_tuned
+Total Evaluation Rows: 1800 / 1800
+Total Rule-24 Exclusions Logged: 0
+```
+
+### Row-count / exclusion integrity
+Expected rows: 1800 (300 x 6 methods)   Actual: 1800   Exclusions: 0
+
+### Result — selection rule applied for real (full 300 vs full 300, n=100/category both sides)
+
+| Category | Metric | Committed (atten=100) | Tuned (atten=30) | Δ | Regression rule (≤0.005 STOI / ≤0.1dB SI-SNR) | PESQ target (>2.5) |
+|---|---|---|---|---|---|---|
+| stationary | PESQ-WB | 2.4823 | **2.5385** | +0.0562 | — | **FAIL → PASS** |
+| | STOI | 0.9169 | 0.9128 | −0.0041 | PASS (within 0.005) | |
+| | SI-SNR | 16.1387 | 16.1093 | −0.0294 dB | PASS (within 0.1 dB) | |
+| impulsive | PESQ-WB | 2.4916 | **2.5428** | +0.0512 | — | **FAIL → PASS** |
+| | STOI | 0.9196 | 0.9194 | −0.0002 | PASS (within 0.005) | |
+| | SI-SNR | 15.1950 | 15.2402 | +0.0452 dB | PASS (improves) | |
+| non_stationary | PESQ-WB | 2.1303 | 2.2128 | +0.0825 | — | still FAIL (2.21 < 2.5, expected — §1.1) |
+| | STOI | 0.8297 | 0.8334 | +0.0037 | PASS (improves) | |
+| | SI-SNR | 10.7485 | 10.8566 | +0.1081 dB | improves | |
+
+**Both previously-failing PESQ cells (stationary, impulsive) now PASS**, with STOI/SI-SNR for both staying
+within the pre-committed no-regression tolerance (in fact improving on 4 of 6 STOI/SI-SNR checks) — the
+selection rule (R3 risk in the risk register: "tuning improves PESQ while regressing STOI/SI-SNR") did not
+materialize. Non-stationary improves on all 3 metrics too but remains far short of every target, consistent
+with §1.1's structural argument (unaffected by this tuning, as expected — it targets PESQ headroom, not
+the cocktail-party separation problem).
+
+**Compliance count: 4/9 → 6/9.** D1's target is met, via a single global parameter change
+(`atten_lim_db: 100 → 30`) that happens to be optimal for all three categories simultaneously — no
+per-category config differentiation was actually needed, though the config still exposes
+`atten_lim_db_by_category` for clarity/future tuning.
+
+### Config change
+`config/audio_config.yaml`: `model.atten_lim_db` default changed 100 → 30, with a comment recording the
+evidence. (See same-day config diff.)
+
+### Result
+**PASS.** Proceeding to T5 (spectral tilt / pre-emphasis experiments, expected null per D5).
+
+---
+
+## 2026-09-04 — Phase 3 T5: Spectral tilt / pre-emphasis — dropped (negative result, as D5 expected)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** T4's 60-file stratified subset, scored against the atten_lim_db=30/post_filter=off DFN3 output.
+
+### What changed
+- `scripts/postproc_experiments.py` — new, self-tested, registered in `scripts/run_all_selftests.py`.
+- `results/postproc_tilt_experiment.csv` — new (evidence, kept per DoD-4).
+- `docs/postproc_experiments.md` — new: full result table + negative-result writeup.
+
+### Evidence (verbatim)
+```
+$ uv run python scripts/postproc_experiments.py --self-test
+  [PASS] test 1: alpha=0.0 is identity
+  [PASS] test 2: pre-emphasis formula matches y[n]=x[n]-alpha*x[n-1]
+  [PASS] test 3: pre-emphasis suppresses DC/low-frequency content as expected
+postproc_experiments self-test -- ALL PASSED
+
+$ uv run python scripts/postproc_experiments.py
+  category=stationary alpha=0.0: PESQ=2.5023 STOI=0.8961 SI-SNR=15.377
+  category=stationary alpha=0.97: PESQ=2.4167 STOI=0.8955 SI-SNR=-10.0827
+  category=impulsive alpha=0.97: PESQ=2.63   STOI=0.9221 SI-SNR=-10.2372
+  (full grid: alpha in {0.0, 0.5, 0.95, 0.97} x 3 categories -- see results/postproc_tilt_experiment.csv)
+```
+
+### Result — DROPPED (DoD-4: negative result logged, not deleted)
+**No alpha improves PESQ in any category.** STOI barely moves. SI-SNR collapses catastrophically at
+alpha≥0.95 (−6 to −11 dB — worse than the unprocessed noisy baseline) because pre-emphasis detunes the
+enhanced signal's spectral balance relative to the unfiltered `clean_ref_path`, which the waveform-level
+SI-SNR metric penalizes heavily even though PESQ/STOI barely register it. Matches D5's prior exactly:
+DFN3 already applies a learned, context-conditioned ERB-scale gain; a static external tilt fights it
+rather than complementing it. No config flag added, no live-pipeline code path created — this stays a
+Phase 3 evaluation artifact only. T4's `atten_lim_db=30, post_filter=off` (no post-processing) remains
+the recommendation.
+
+### Result
+**PASS** (experiment completed and honestly reported as a negative finding; DoD-4 satisfied).
+Proceeding to T6 (offline reference-adaptive A/B, Rule 31 separate track).
+
+---
+
+## 2026-09-04 — Phase 3 T6: Offline reference-adaptive A/B with a realistic reference (Rule 31)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** clean 300 manifest, non_stationary category (crowd n=40 first, then full n=100)
+
+### What changed
+- `scripts/simulate_reference_channel.py` — new (DoD-5, per D3). Degrades the oracle noise reference via
+  (1) a second synthetic RIR (different seed — different acoustic path), (2) a fixed 240-sample time
+  offset (mic spacing / independent USB clocks), (3) clean-speech leakage at −15 dB relative to the noise
+  (reference mic also hears the talker). Self-tested (4 tests: shape/finiteness, envelope-correlated-but-
+  not-identical to the oracle once the known time-offset is undone, leakage scales monotonically with the
+  configured dB, distinct seeds produce distinct acoustic paths). Registered in `scripts/run_all_selftests.py`.
+- `results/dualmic_realistic_outputs/` — new (NLMS-against-realistic-reference audio).
+- `results/results_dualmic_crowd.csv` (crowd, n=40), `results/results_dualmic_nonstationary_full.csv`
+  (full category, n=100) — new. **Kept on a separate track — not merged into the 9-cell single-channel
+  matrix or `target_compliance.json`** (Rule 31).
+
+### Evidence (verbatim)
+```
+$ uv run python scripts/simulate_reference_channel.py --self-test
+  [PASS] test 1: output shape/finiteness
+  [PASS] test 2: envelope-correlated-but-not-identical to true noise, once the known time-offset is undone (corr=0.291)
+  [PASS] test 3: leakage ratio scales monotonically with the configured leakage_db
+  [PASS] test 4: distinct combo_seed produces a distinct simulated acoustic path
+simulate_reference_channel self-test -- ALL PASSED
+
+$ uv run python scripts/simulate_reference_channel.py --run-ab --subtype crowd --out-csv results/results_dualmic_crowd.csv
+Dual-mic A/B: 40 mixtures -> results/results_dualmic_crowd.csv
+
+$ uv run python scripts/simulate_reference_channel.py --run-ab --out-csv results/results_dualmic_nonstationary_full.csv
+Dual-mic A/B: 100 mixtures -> results/results_dualmic_nonstationary_full.csv
+```
+`deepfilternet_alone` and `nlms_oracle_upper_bound` columns are reused directly from the committed
+`results/eval_raw.csv` (already verified this session) — only `nlms_realistic` required new inference.
+Sanity cross-check: reused columns reproduce `docs/non_stationary_root_cause.md`'s cited helicopter
+(STOI 0.9108, SI-SNR 14.57) and crowd (STOI 0.7080, SI-SNR 5.02) numbers exactly.
+
+### Result — all three conditions, crowd and full category
+
+| Condition | Crowd (n=40) PESQ / STOI / SI-SNR | Full non_stationary (n=100) PESQ / STOI / SI-SNR |
+|---|---|---|
+| `deepfilternet_alone` | 1.633 / 0.708 / 5.02 dB | 2.130 / 0.830 / 10.75 dB |
+| `nlms_oracle_upper_bound` *(unreachable — Rule 18 oracle reference)* | 1.404 / **0.866** / **6.64 dB** | 1.399 / 0.880 / 7.85 dB |
+| `nlms_realistic` *(this session's degraded reference)* | 1.120 / **0.644** / **−2.33 dB** | 1.104 / 0.695 / **−2.63 dB** |
+
+**The oracle's apparent STOI/SI-SNR advantage over DeepFilterNet-alone on crowd babble does not survive a
+realistic reference — it inverts.** `nlms_oracle_upper_bound` beats `deepfilternet_alone` on STOI (0.866
+vs 0.708) and SI-SNR (6.64 vs 5.02 dB) on crowd, which is exactly the pattern `phase3_plan.md` §1.2
+warned could be mistaken for "dual-mic solves crowd babble." `nlms_realistic` instead falls **below**
+DeepFilterNet-alone on every metric, and SI-SNR goes sharply negative (−2.33 dB crowd, −2.82 dB
+helicopter, −2.63 dB overall) — worse than doing nothing to the noisy signal. Consistent across both
+subtypes (not crowd-specific), confirming this is a property of the reference degradation breaking NLMS's
+adaptation, not a crowd-only artifact. This closes the §1.2 loop with a real (simulated) number: the
+spread between `nlms_oracle_upper_bound` and `nlms_realistic` (≈9 dB SI-SNR on crowd) is the honest
+estimate of what a live dual-mic system would lose relative to the offline oracle baseline, and it is
+large enough that a simple NLMS reference-assisted stage is not a viable mitigation for the non-stationary
+gap without a materially better reference (e.g. actual beamforming/alignment — out of scope, §11).
+
+### Result
+**PASS.** DoD-5 met. Answers §13's open question: dual-mic-as-the-answer framing (option 2) is **not**
+supported by this evidence — recommend leading with option 1 (scoped-limitation framing) as
+`phase3_plan.md` already recommended, now with a concrete, evidenced reason rather than a structural
+argument alone. Proceeding to T7 (consolidated compliance rerun).
+
+---
+
+## 2026-09-04 — Phase 3 T7: Consolidated compliance rerun (T4 winner applied)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+**Dataset:** clean 300 (full set), tuned config (`atten_lim_db=30`)
+
+### What changed
+- `results/final/target_compliance.json`, `results/final/target_compliance.md` — regenerated in place
+  (previous 2026-09-04 manifest-drift-correction version preserved via git history + an explicit
+  superseding note in-document, matching established project practice — not deleted).
+- New `note_phase3_tuning`, `note_non_stationary_arithmetic`, and
+  `reference_assisted_dualmic_track_rule31` sections added (the latter kept structurally separate from
+  `results`/`overall_summary` per Rule 31 — cross-referenced, never blended).
+
+### Result
+Applied T4's winning config (`atten_lim_db=30`) as the new headline DeepFilterNet3 numbers (the system as
+now deployed, per the `config/audio_config.yaml` change). T5 had no winner to apply (dropped). T6 stays
+on its own Rule-31 track, cross-referenced in §5 of the report but excluded from the 9-cell count.
+
+**Compliance summary table (before -> after, Phase 3):**
+
+| Cell | Pre-Phase-3 (atten=100, this session's verified baseline) | Post-Phase-3 (atten=30) | Δ | Cause |
+|---|---|---|---|---|
+| stationary SI-SNR | PASS (16.14dB) | PASS (16.11dB) | −0.03dB | atten tuning (no regression) |
+| stationary STOI | PASS (0.9169) | PASS (0.9128) | −0.004 | atten tuning (no regression) |
+| stationary PESQ-WB | **FAIL (2.4823)** | **PASS (2.5385)** | **+0.056** | **atten tuning (T4)** |
+| non_stationary SI-SNR | FAIL (10.75dB) | FAIL (10.86dB) | +0.11dB | atten tuning (still fails — structural, §1.1) |
+| non_stationary STOI | FAIL (0.8297) | FAIL (0.8334) | +0.004 | atten tuning (still fails — structural, §1.1) |
+| non_stationary PESQ-WB | FAIL (2.1303) | FAIL (2.2128) | +0.083 | atten tuning (still fails — structural, §1.1) |
+| impulsive SI-SNR | PASS (15.20dB) | PASS (15.24dB) | +0.04dB | atten tuning (no regression) |
+| impulsive STOI | PASS (0.9196) | PASS (0.9194) | −0.0002 | atten tuning (no regression) |
+| impulsive PESQ-WB | **FAIL (2.4916)** | **PASS (2.5428)** | **+0.051** | **atten tuning (T4)** |
+
+**Final cell count: 6 of 9 PASS.** Matches D1's target exactly. Remaining 3 failing cells are all
+non_stationary, all root-caused to the same structural cause (crowd babble / cocktail-party problem,
+§1.1's arithmetic — proven unreachable via post-processing, and Phase 3 T6 additionally shows a realistic
+dual-mic reference doesn't rescue it either). No cross-category averaging used anywhere in the report.
+Reference-assisted (NLMS, dual-mic) results stay on their own track throughout (Rule 31).
+
+### Result
+**PASS.** DoD-6, DoD-7 met. Proceeding to T8 (correct the stale PESQ-availability caveat in
+`docs/non_stationary_root_cause.md`, Rule 27/DoD-8).
+
+---
+
+## 2026-09-04 — Phase 3 T8: Correct stale PESQ-availability caveat (Rule 27, DoD-8)
+
+**Machine:** devmachine (Windows 11, x86_64, uv venv)
+
+### What changed
+`docs/non_stationary_root_cause.md`:
+- §2: marked the "pesq C-extension unavailable" caveat superseded (struck through, preserved, not
+  deleted) — verified false as of this session (§1.3 of `phase3_plan.md`; the toolchain was installed
+  during the 2026-08-24 incident recovery).
+- §3: added the PESQ-WB column to the per-subtype table, recomputed against the current T4-tuned config.
+  New finding: DeepFilterNet's crowd PESQ (1.72) is still the best of any method on that subtype (next
+  best NLMS 1.40) — it's failing to help *enough* on crowd, not failing to help at all, a materially
+  different claim than the STOI/ΔSI-SNR section's "NLMS edges out DeepFilterNet."
+- §1, §7: updated cited numbers to the current committed (T4-tuned) compliance figures; added a §7 note
+  cross-referencing the T6 dual-mic finding.
+
+### Evidence
+Diff of `docs/non_stationary_root_cause.md` (git diff, not pasted in full here — see the file). Per-subtype
+PESQ computed from `results/eval_raw_tuned_confirm.csv`, `category=='non_stationary'`, grouped by
+`(method, subtype)`, cross-checked: DeepFilterNet(tuned)/helicopter n=60, DeepFilterNet(tuned)/crowd n=40
+— row counts match the pre-existing table's n values exactly.
+
+### Result
+**PASS.** DoD-8 met. All Phase 3 tasks (T0–T8) complete; T9 (optional live spot-check) is Track B, joins
+the deferred Pi batch per project convention, not a Phase 3 gate.
