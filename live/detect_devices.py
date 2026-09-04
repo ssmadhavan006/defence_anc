@@ -74,26 +74,56 @@ def detect_and_suggest():
             except Exception:
                 pass
 
+    # Collect USB input devices with at least 1 channel (Phase 1: dual-mic candidates).
+    usb_inputs = [
+        (idx, dev) for idx, dev in enumerate(devices)
+        if dev["max_input_channels"] >= 1
+        and any(kw in dev["name"].lower() for kw in usb_keywords)
+    ] if n_devices > 0 else []
+
     print("-" * 60)
     print("=== Suggested YAML Config Settings ===")
     print("Update config/audio_config.yaml with these values:")
     print()
     print("audio:")
-    
+
     if suggested_in is not None and 0 <= suggested_in < n_devices:
         print(f"  input_device: {suggested_in}  # {devices[suggested_in]['name']}")
     elif suggested_in is not None:
         print(f"  input_device: {suggested_in}")
     else:
         print("  input_device: null")
-        
+
     if suggested_out is not None and 0 <= suggested_out < n_devices:
         print(f"  output_device: {suggested_out}  # {devices[suggested_out]['name']}")
     elif suggested_out is not None:
         print(f"  output_device: {suggested_out}")
     else:
         print("  output_device: null")
-        
+
+    # Phase 1 dual-mic suggestion: if there are at least 2 separate USB input
+    # devices, suggest the first as primary and the second as reference.
+    if len(usb_inputs) >= 2:
+        ref_idx = usb_inputs[1][0]
+        ref_name = usb_inputs[1][1]["name"]
+        print()
+        print("  # Phase 1 dual-mic (two separate USB mics — Topology B):")
+        print("  # Primary mic already set as input_device above.")
+        print("  # Set reference_device to your second USB mic index:")
+        print("  dual_mic:")
+        print("    enabled: false  # change to true when second mic is ready")
+        print(f"    reference_device: {ref_idx}  # {ref_name}")
+        print("    ref_delay_samples: 0  # run `python live/main.py calibrate` to measure")
+        print("    topology: dual_usb")
+        print()
+        print("  # Then run: python live/main.py calibrate")
+        print("  #   to measure the time-of-flight delay between the two mics.")
+    elif len(usb_inputs) == 1:
+        print()
+        print("  # Only one USB input device found.")
+        print("  # For Phase 1 dual-mic, connect a second USB microphone.")
+        print("  # Run `python live/main.py detect` again after connecting it.")
+
     print()
 
     if n_devices == 0:

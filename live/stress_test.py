@@ -120,6 +120,11 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
     final_overflows = pipeline._in_buf.overflow_count
     final_underruns = pipeline._dropped_chunks
     teardown_underruns = pipeline._teardown_underruns
+    # Phase 2 (D2): underruns within pipeline.startup_grace_sec of stream
+    # start are a cold-start transient, not a real-time miss -- EXCLUDED from
+    # total_dropouts/the verdict below, same as teardown_underruns already
+    # was, but always printed and stored so a regression can never hide here.
+    startup_underruns = pipeline._startup_underruns
     total_dropouts = final_overflows + final_underruns
     
     cpu_vals = [r["cpu_percent"] for r in records]
@@ -152,6 +157,7 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
         "max_temperature_c": round(max_temp, 2) if max_temp is not None else None,
         "total_overflows": final_overflows,
         "total_underruns": final_underruns,
+        "startup_underruns": startup_underruns,
         "teardown_underruns": teardown_underruns,
         "total_dropouts": total_dropouts,
         "history": records
@@ -167,6 +173,7 @@ def run_stress_test(duration_sec: int, config_path: str, output_path: str):
     if max_temp is not None:
         print(f"Max Temperature : {max_temp:.1f}°C")
     print(f"Total Dropouts  : {total_dropouts} ({final_overflows} overflows, {final_underruns} underruns)")
+    print(f"Startup Grace   : {startup_underruns} underruns within startup_grace_sec (excluded from verdict, always reported)")
     if teardown_underruns:
         print(f"Shutdown Drain  : {teardown_underruns} underruns after stop() (expected, excluded from verdict)")
     print("==========================")

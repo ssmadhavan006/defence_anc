@@ -60,6 +60,14 @@ import sounddevice as sd
 
 from live.ring_buffer import RingBuffer
 from live.inference_engine import InferenceEngine
+from live.cpu_affinity import set_thread_affinity
+# NOTE: live.fast_resample IS imported at module scope (unlike residual_filter
+# / reference_nlms below) because it degrades gracefully on its own -- it is
+# importable without numba (see its module docstring) and only raises if
+# resample_fast() is actually CALLED without numba installed. That call path
+# is guarded in start() so a disabled (default) pipeline.fast_resample never
+# reaches it.
+from live.fast_resample import resample_fast as _resample_fast_impl, _NUMBA_AVAILABLE as _FAST_RESAMPLE_NUMBA_AVAILABLE
 # NOTE: live.residual_filter is imported LAZILY, inside start(), only when
 # pipeline.residual_filter is actually enabled. It depends on numba, which is
 # an OPTIONAL dependency (see requirements-optional.txt). Importing it at
@@ -97,7 +105,10 @@ def _load_config(config_path: str) -> dict:
             "log_timing": False,
             "latency_warn_sec": 0.30,
             "warmup_passes": 3,
-            "priming_chunks": 1,
+            "priming_chunks": 1.0,
+            "startup_grace_sec": 0.5,
+            "cpu_affinity": None,
+            "fast_resample": False,
             "residual_filter": False,
             "inference_backend": "pytorch",
             "onnx_dir": "results/onnx",
@@ -112,7 +123,7 @@ def _load_config(config_path: str) -> dict:
 
     try:
         import yaml
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f)
         # Deep-merge loaded over defaults.
         for section, values in loaded.items():
@@ -243,13 +254,52 @@ def _resample(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
     return np.interp(dst_idx, src_idx, x).astype(x.dtype)
 
 
-def _resample_multi(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
-    """_resample() applied independently per channel. x shape (n, channels)."""
+def _resample_multi(x: np.ndarray, sr_from: int, sr_to: int, use_fast: bool = False) -> np.ndarray:
+    """_resample() (or the numba fast_resample, per D4) applied independently
+    per channel. x shape (n, channels)."""
     if sr_from == sr_to or x.shape[0] == 0:
         return x
+    resample_fn = _resample_fast_impl if use_fast else _resample
     return np.stack(
-        [_resample(x[:, ch], sr_from, sr_to) for ch in range(x.shape[1])], axis=1
+        [resample_fn(x[:, ch], sr_from, sr_to) for ch in range(x.shape[1])], axis=1
     )
+
+
+def _compute_priming_samples(priming_chunks: float, chunk_samples: int) -> int:
+    """
+    Number of silence samples to pre-load into the output ring buffer at
+    startup (Phase 2, D1). `priming_chunks` is a float number of chunk
+    durations; `1.0` reproduces the pre-Phase-2 behaviour exactly (one whole
+    chunk of silence), since round(1.0 * chunk_samples) == chunk_samples.
+    """
+    if priming_chunks < 0:
+        raise ValueError(f"priming_chunks must be >= 0, got {priming_chunks}")
+    return round(priming_chunks * chunk_samples)
+
+
+def _classify_underrun(is_running: bool, since_start_sec, grace_sec: float) -> str:
+    """
+    Bucket a single output-callback underrun (Phase 2, D2).
+
+    Returns one of "teardown" / "startup" / "real":
+      - "teardown": the pipeline has already been stop()ped; the output
+        stream outliving the inference thread is expected shutdown drain,
+        not a failure.
+      - "startup":  within `grace_sec` of stream start, while inference may
+        not yet have produced its first chunk(s) at reduced priming. Cold
+        start transient, excluded from the stress verdict but always
+        reported.
+      - "real": a genuine real-time miss. This is what PASS/FAIL gates on.
+
+    `since_start_sec` is None only in the (untested-in-practice) case where
+    the callback fires before start() has recorded a start time; treated as
+    "still in the startup grace window" rather than crashing on None < float.
+    """
+    if not is_running:
+        return "teardown"
+    if since_start_sec is None or since_start_sec < grace_sec:
+        return "startup"
+    return "real"
 
 
 def _resolve_device(dev_spec, kind="input"):
@@ -323,19 +373,64 @@ class LivePipeline:
         self._atten_lim_db = float(model_cfg.get("atten_lim_db", 100.0))
         self._output_gain = float(model_cfg.get("output_gain", 1.0))
         self._warmup_passes = int(pipe_cfg.get("warmup_passes", 3))
-        self._priming_chunks = int(pipe_cfg.get("priming_chunks", 1))
+        self._priming_chunks = float(pipe_cfg.get("priming_chunks", 1.0))
+        if self._priming_chunks < 0:
+            raise ValueError(f"priming_chunks must be >= 0, got {self._priming_chunks}")
+        self._startup_grace_sec = float(pipe_cfg.get("startup_grace_sec", 0.5))
+        cpu_affinity_cfg = pipe_cfg.get("cpu_affinity", None)
+        self._cpu_affinity = list(cpu_affinity_cfg) if cpu_affinity_cfg is not None else None
+        self._fast_resample_enabled = bool(pipe_cfg.get("fast_resample", False))
         self._residual_filter_enabled = bool(pipe_cfg.get("residual_filter", False))
         self._inference_backend = str(pipe_cfg.get("inference_backend", "pytorch"))
         self._onnx_dir = str(pipe_cfg.get("onnx_dir", "results/onnx"))
         self._log_timing = bool(pipe_cfg.get("log_timing", False))
         self._latency_warn_sec = float(pipe_cfg.get("latency_warn_sec", 0.30))
         self._mode = (mode_override or pipe_cfg.get("mode", "enhance")).strip().lower()
+        # Reference stream hardware rate, resolved in start().
+        self._ref_stream_sr = self._sr
 
         if self._mode not in ("enhance", "bypass"):
             raise ValueError(f"Unknown mode {self._mode!r}. Use 'enhance' or 'bypass'.")
 
         self._in_buf = RingBuffer(self._ring_cap, channels=self._channels)
         self._out_buf = RingBuffer(self._ring_cap, channels=self._channels)
+
+        # --- Phase 1 dual-mic configuration ---
+        dual_mic_cfg = config.get("audio", {}).get("dual_mic", {})
+        self._dual_mic_enabled = bool(dual_mic_cfg.get("enabled", False))
+        self._ref_device = dual_mic_cfg.get("reference_device", None)
+        self._ref_delay_samples = int(dual_mic_cfg.get("ref_delay_samples", 0))
+
+        ref_nlms_cfg = config.get("pipeline", {}).get("reference_nlms", {})
+        self._ref_nlms_enabled = bool(ref_nlms_cfg.get("enabled", False))
+        self._ref_nlms_filter_length = int(ref_nlms_cfg.get("filter_length", 64))
+        self._ref_nlms_mu = float(ref_nlms_cfg.get("mu", 0.01))
+        self._ref_nlms_eps = float(ref_nlms_cfg.get("eps", 1e-6))
+        self._ref_nlms_stage = str(ref_nlms_cfg.get("stage", "post_dfn"))
+
+        if self._ref_nlms_enabled and not self._dual_mic_enabled:
+            raise ValueError(
+                "pipeline.reference_nlms.enabled requires audio.dual_mic.enabled: true. "
+                "Enable dual_mic first."
+            )
+
+        # Second ring buffer + stream for reference channel (single-channel).
+        # Created only when dual_mic is enabled to keep the single-mic path
+        # completely unmodified.
+        self._ref_buf = RingBuffer(self._ring_cap, channels=1) if self._dual_mic_enabled else None
+        self._stream_ref = None
+        self._ref_nlms = None  # instantiated in start() when enabled
+
+        # Delay line for reference channel alignment (Topology B clock drift
+        # compensation). Length = abs(ref_delay_samples). Positive delay means
+        # reference is ahead; we delay it by holding samples in this buffer.
+        ref_delay_abs = abs(self._ref_delay_samples)
+        self._ref_delay_line = (
+            np.zeros(ref_delay_abs, dtype=np.float32) if ref_delay_abs > 0 else None
+        )
+
+        # ERLE telemetry accumulators (populated from reference_nlms.erle_db()).
+        self._erle_db_last = 0.0
 
         self._running = threading.Event()
         self._inference_thread = None
@@ -366,6 +461,11 @@ class LivePipeline:
         # every 10 s checkpoint, final count 1).
         self._dropped_chunks = 0
         self._teardown_underruns = 0
+        # Phase 2 (D2): underruns within self._startup_grace_sec of stream
+        # start, bucketed separately from _dropped_chunks -- see
+        # _classify_underrun() above and _output_callback below.
+        self._startup_underruns = 0
+        self._stream_start_t = None
         self._inference_errors = 0
 
         # Last processed chunk, exposed for visual demos (e.g. demo/spectrogram.py).
@@ -385,8 +485,17 @@ class LivePipeline:
         # indata shape: (frames, channels), float32, at self._in_stream_sr.
         chunk = indata
         if self._in_stream_sr != self._sr:
-            chunk = _resample_multi(chunk, self._in_stream_sr, self._sr)
+            chunk = _resample_multi(chunk, self._in_stream_sr, self._sr, use_fast=self._fast_resample_enabled)
         self._in_buf.write(chunk.copy())
+
+    def _ref_callback(self, indata, frames, time_info, status):
+        """Receive audio from the reference mic and push to reference ring buffer."""
+        if status:
+            print(f"[pipeline] Reference status: {status}", file=sys.stderr)
+        chunk = indata
+        if self._ref_stream_sr != self._sr:
+            chunk = _resample_multi(chunk, self._ref_stream_sr, self._sr, use_fast=self._fast_resample_enabled)
+        self._ref_buf.write(chunk[:, :1].copy())  # always single-channel
 
     def _output_callback(self, outdata, frames, time_info, status):
         """Pull enhanced audio from output ring buffer and send to speakers."""
@@ -420,15 +529,24 @@ class LivePipeline:
         if chunk is None:
             # Buffer underrun — output silence to avoid glitches.
             outdata[:] = 0.0
-            if self._running.is_set():
-                self._dropped_chunks += 1
-            else:
+            since_start = (
+                time.monotonic() - self._stream_start_t
+                if self._stream_start_t is not None else None
+            )
+            bucket = _classify_underrun(self._running.is_set(), since_start, self._startup_grace_sec)
+            if bucket == "teardown":
                 # Post-stop() drain: the inference thread is already gone, so
                 # an empty buffer here is expected, not a real-time miss.
                 self._teardown_underruns += 1
+            elif bucket == "startup":
+                # Cold-start transient (Phase 2, D2) -- excluded from the
+                # stress verdict but always reported. See _classify_underrun.
+                self._startup_underruns += 1
+            else:
+                self._dropped_chunks += 1
         else:
             if self._out_stream_sr != self._sr:
-                chunk = _resample_multi(chunk, self._sr, self._out_stream_sr)
+                chunk = _resample_multi(chunk, self._sr, self._out_stream_sr, use_fast=self._fast_resample_enabled)
             # Resampling rounds to the nearest sample count, which can be
             # off by one relative to `frames` -- pad/trim to the exact size
             # sounddevice expects for this callback.
@@ -454,6 +572,18 @@ class LivePipeline:
             file=sys.stderr,
         )
 
+        # Phase 2 (D5): only THIS thread can be pinned from Python -- the
+        # audio callbacks run on PortAudio's internal C threads. No-ops with
+        # a warning (never raises) when self._cpu_affinity is None or
+        # unsupported on this platform. See live/cpu_affinity.py.
+        if self._cpu_affinity is not None:
+            pinned = set_thread_affinity(self._cpu_affinity)
+            print(
+                f"[pipeline] Inference thread affinity -> cores={self._cpu_affinity}: "
+                f"{'applied' if pinned else 'not applied (see warning above)'}",
+                file=sys.stderr,
+            )
+
         while self._running.is_set():
             chunk = self._in_buf.read(self._chunk_samples, timeout=self._chunk_sec * 2)
             if chunk is None:
@@ -465,6 +595,36 @@ class LivePipeline:
                 # InferenceEngine expects (n_samples,) or (1, n_samples) mono.
                 mono = chunk[:, 0]   # Take channel 0; DeepFilterNet is single-channel.
                 self.last_in_chunk = mono
+
+                # Read reference channel, applying delay compensation.
+                ref_mono = None
+                if self._dual_mic_enabled and self._ref_buf is not None:
+                    ref_chunk = self._ref_buf.read(self._chunk_samples,
+                                                   timeout=self._chunk_sec * 2)
+                    if ref_chunk is not None:
+                        ref_raw = ref_chunk[:, 0]
+                        # Apply integer delay to align reference with primary.
+                        # ref_delay_samples > 0: reference is ahead; delay it.
+                        if self._ref_delay_samples > 0 and self._ref_delay_line is not None:
+                            combined = np.concatenate([self._ref_delay_line, ref_raw])
+                            ref_mono = combined[:self._chunk_samples]
+                            self._ref_delay_line = combined[self._chunk_samples:]
+                        # ref_delay_samples < 0: primary is ahead; delay primary.
+                        elif self._ref_delay_samples < 0 and self._ref_delay_line is not None:
+                            combined = np.concatenate([self._ref_delay_line, mono])
+                            mono = combined[:self._chunk_samples]
+                            self._ref_delay_line = combined[self._chunk_samples:]
+                            ref_mono = ref_raw
+                        else:
+                            ref_mono = ref_raw
+
+                # Phase 1 pre-DFN reference NLMS stage.
+                if (self._mode == "enhance"
+                        and self._ref_nlms is not None
+                        and ref_mono is not None
+                        and self._ref_nlms_stage == "pre_dfn"):
+                    mono = self._ref_nlms.process_chunk(mono, ref_mono)
+                    self._erle_db_last = self._ref_nlms.erle_db()
 
                 t0 = time.perf_counter()
                 if self._mode == "enhance":
@@ -492,10 +652,18 @@ class LivePipeline:
                 else:
                     out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
 
-                # P1-1 residual stage: runs on DeepFilterNet's output, not bypass
-                # pass-through (there's no model residual to clean up there).
+                # P1-1 residual ALE stage (reference-free, runs on DFN3 output).
                 if self._mode == "enhance" and self._residual_filter is not None:
                     out_mono = self._residual_filter.process_chunk(out_mono)
+
+                # Phase 1 post-DFN reference NLMS stage.
+                if (self._mode == "enhance"
+                        and self._ref_nlms is not None
+                        and ref_mono is not None
+                        and self._ref_nlms_stage == "post_dfn"):
+                    out_mono = self._ref_nlms.process_chunk(out_mono, ref_mono)
+                    self._erle_db_last = self._ref_nlms.erle_db()
+
             except Exception as exc:
                 # A single bad chunk must not kill this thread -- that would
                 # silently blackhole all audio output for the rest of the
@@ -516,6 +684,19 @@ class LivePipeline:
 
     def start(self):
         """Load model, open streams, start inference thread."""
+        if self._fast_resample_enabled and not _FAST_RESAMPLE_NUMBA_AVAILABLE:
+            # Fail HERE (before any hardware is touched), not on the first
+            # audio callback that actually needs to resample -- same
+            # discipline as residual_filter/reference_nlms below.
+            raise RuntimeError(
+                "pipeline.fast_resample is enabled but numba is not installed. "
+                "Install it with:\n"
+                "    pip install numba==0.67.0\n"
+                "or set pipeline.fast_resample: false in config/audio_config.yaml "
+                "to use the default np.interp-based resampler (see "
+                "live/fast_resample.py -- D4: measure-first, keep only if it helps)."
+            )
+
         print(f"[pipeline] Loading InferenceEngine (mode={self._mode})...", file=sys.stderr)
         self._engine = InferenceEngine(
             sample_rate=self._sr,
@@ -537,13 +718,38 @@ class LivePipeline:
                 raise RuntimeError(
                     "pipeline.residual_filter is enabled but its optional dependency "
                     f"is missing ({exc}). Install it with:\n"
-                    "    pip install -r requirements-optional.txt\n"
+                    "    pip install numba==0.67.0\n"
                     "or set pipeline.residual_filter: false in config/audio_config.yaml "
                     "to run without the residual stage (it is off by default and not "
                     "yet quality-validated -- see live/residual_filter.py)."
                 ) from exc
             print("[pipeline] Residual filter (P1-1, reference-free ALE) ENABLED.", file=sys.stderr)
             self._residual_filter = ResidualALEFilter()
+
+        if self._ref_nlms_enabled:
+            # Lazy import — same pattern as residual_filter. A disabled feature
+            # must never break the core path when numba is absent (rule from
+            # the 2026-08-24 Pi incident). Fail here with an actionable message.
+            try:
+                from live.reference_nlms import ReferenceNLMSFilter
+            except ImportError as exc:
+                raise RuntimeError(
+                    "pipeline.reference_nlms.enabled requires numba, which is not "
+                    f"installed ({exc}). Install it with:\n"
+                    "    pip install numba==0.67.0\n"
+                    "or set pipeline.reference_nlms.enabled: false in "
+                    "config/audio_config.yaml."
+                ) from exc
+            print(
+                f"[pipeline] Reference NLMS (Phase 1, stage={self._ref_nlms_stage!r}) ENABLED "
+                f"(L={self._ref_nlms_filter_length}, mu={self._ref_nlms_mu}).",
+                file=sys.stderr,
+            )
+            self._ref_nlms = ReferenceNLMSFilter(
+                filter_length=self._ref_nlms_filter_length,
+                mu=self._ref_nlms_mu,
+                eps=self._ref_nlms_eps,
+            )
 
         self._running.set()
         self._inference_thread = threading.Thread(
@@ -597,17 +803,52 @@ class LivePipeline:
             latency="low",
         )
 
+        # Open reference mic stream (Phase 1 — only when dual_mic is enabled).
+        if self._dual_mic_enabled and self._ref_device is not None:
+            ref_dev = _resolve_device(self._ref_device, kind="input")
+            self._ref_stream_sr = _resolve_stream_samplerate(
+                ref_dev, self._sr, 1, kind="input"
+            )
+            ref_blocksize = int(round(self._ref_stream_sr * self._chunk_sec))
+            print(
+                f"[pipeline] Opening reference stream "
+                f"(device={ref_dev!r} @ {self._ref_stream_sr} Hz, "
+                f"delay={self._ref_delay_samples} samples)...",
+                file=sys.stderr,
+            )
+            self._stream_ref = sd.InputStream(
+                samplerate=self._ref_stream_sr,
+                blocksize=ref_blocksize,
+                device=ref_dev,
+                channels=1,
+                dtype="float32",
+                callback=self._ref_callback,
+                latency="low",
+            )
+
         self._stream_in.start()
         self._stream_out.start()
+        if self._stream_ref is not None:
+            self._stream_ref.start()
 
-        # Prime the output buffer with silence chunks so the output callback
-        # doesn't underrun before inference produces the first real output.
-        # This is a FIFO -- every primed chunk is permanent standing latency
+        # Phase 2 (D2): marks t=0 for the startup-underrun grace window in
+        # _output_callback / _classify_underrun. Recorded right after the
+        # streams actually start, not at the top of this method.
+        self._stream_start_t = time.monotonic()
+
+        # Prime the output buffer with silence so the output callback doesn't
+        # underrun before inference produces the first real output. This is a
+        # FIFO -- every primed sample is permanent standing latency
         # (priming_chunks * chunk_duration_sec), not a one-time warmup cost.
-        # Keep this as small as the measured inference jitter allows; verify
-        # with stress_test.py after any change (0 dropouts required).
-        silence = np.zeros((self._chunk_samples, self._channels), dtype=np.float32)
-        for _ in range(self._priming_chunks):
+        # Phase 2 (D1): priming_chunks is now a float; 1.0 writes exactly
+        # self._chunk_samples samples, byte-identical to the old int-loop
+        # behaviour. Keep this as small as the measured inference jitter
+        # allows; verify with stress_test.py after any change (0 real
+        # dropouts required -- startup-window underruns are tracked
+        # separately, see _startup_underruns).
+        n_priming_samples = _compute_priming_samples(self._priming_chunks, self._chunk_samples)
+        if n_priming_samples > 0:
+            silence = np.zeros((n_priming_samples, self._channels), dtype=np.float32)
             self._out_buf.write(silence)
 
         print(
@@ -625,6 +866,10 @@ class LivePipeline:
             self._stream_in.stop()
             self._stream_in.close()
 
+        if self._stream_ref is not None:
+            self._stream_ref.stop()
+            self._stream_ref.close()
+
         if self._stream_out is not None:
             self._stream_out.stop()
             self._stream_out.close()
@@ -640,6 +885,18 @@ class LivePipeline:
         lats = np.array(self._chunk_latencies) * 1000.0   # ms
         audio_dur_ms = self._chunk_sec * 1000.0
         rtfs = lats / audio_dur_ms
+        dual_mic_line = ""
+        if self._dual_mic_enabled:
+            ref_overflows = self._ref_buf.overflow_count if self._ref_buf else 0
+            nlms_line = (
+                f"  Reference NLMS ERLE (telemetry): {self._erle_db_last:.1f} dB\n"
+                if self._ref_nlms is not None else ""
+            )
+            dual_mic_line = (
+                f"\n  Reference buffer overflows: {ref_overflows}\n"
+                f"  ref_delay_samples: {self._ref_delay_samples}\n"
+                + nlms_line
+            )
         print(
             f"\n[pipeline] === Session stats ({len(lats)} chunks) ===\n"
             f"  Latency: median={np.median(lats):.2f} ms, "
@@ -649,8 +906,10 @@ class LivePipeline:
             f"p95={np.percentile(rtfs, 95):.4f}\n"
             f"  Input buffer overflows: {self._in_buf.overflow_count}\n"
             f"  Output buffer underruns: {self._dropped_chunks}"
-            f"  (+{self._teardown_underruns} during shutdown drain, not a failure)\n"
-            f"  Inference errors: {self._inference_errors}",
+            f"  (+{self._startup_underruns} during startup grace window, "
+            f"+{self._teardown_underruns} during shutdown drain -- neither is a failure)\n"
+            f"  Inference errors: {self._inference_errors}"
+            + dual_mic_line,
             file=sys.stderr,
         )
 
@@ -672,6 +931,58 @@ class LivePipeline:
 
 def _list_devices():
     print(sd.query_devices())
+
+
+# ---------------------------------------------------------------------------
+# Self-test (Mode A — no hardware required)
+# ---------------------------------------------------------------------------
+
+def _self_test():
+    """
+    Covers the Phase 2 pure-logic pieces that don't need real audio hardware:
+      - D1 fractional priming sample-count arithmetic (A1)
+      - D2 startup/teardown/real underrun classification (A2)
+    Does NOT open any sounddevice stream or load InferenceEngine/DeepFilterNet
+    -- that's Mode B (live/stress_test.py, live/main.py pipeline).
+    """
+    print("live/pipeline.py self-test -- start")
+
+    chunk_samples = 4800  # 100 ms @ 48 kHz, the project default
+
+    # --- Test 1: priming_chunks=1.0 is byte-identical to the pre-Phase-2 behaviour ---
+    n = _compute_priming_samples(1.0, chunk_samples)
+    assert n == chunk_samples, f"1.0 should prime exactly one chunk, got {n} samples"
+    print(f"  [PASS] test 1: priming_chunks=1.0 -> {n} samples (identical to old int-loop behaviour)")
+
+    # --- Test 2: fractional and zero priming ---
+    assert _compute_priming_samples(0.5, chunk_samples) == round(0.5 * chunk_samples)
+    assert _compute_priming_samples(0.25, chunk_samples) == round(0.25 * chunk_samples)
+    assert _compute_priming_samples(0.0, chunk_samples) == 0
+    print(f"  [PASS] test 2: priming_chunks=0.5 -> {_compute_priming_samples(0.5, chunk_samples)} samples, "
+          f"0.25 -> {_compute_priming_samples(0.25, chunk_samples)} samples, 0.0 -> 0 samples")
+
+    # --- Test 3: negative priming_chunks raises ---
+    try:
+        _compute_priming_samples(-0.1, chunk_samples)
+        assert False, "expected ValueError for negative priming_chunks"
+    except ValueError:
+        pass
+    print("  [PASS] test 3: negative priming_chunks raises ValueError")
+
+    # --- Test 4: underrun classification -- teardown always wins ---
+    assert _classify_underrun(is_running=False, since_start_sec=0.01, grace_sec=0.5) == "teardown"
+    assert _classify_underrun(is_running=False, since_start_sec=999.0, grace_sec=0.5) == "teardown"
+    print("  [PASS] test 4: not-running underruns always classify as teardown")
+
+    # --- Test 5: underrun classification -- inside vs outside the startup grace window ---
+    assert _classify_underrun(is_running=True, since_start_sec=0.1, grace_sec=0.5) == "startup"
+    assert _classify_underrun(is_running=True, since_start_sec=0.49, grace_sec=0.5) == "startup"
+    assert _classify_underrun(is_running=True, since_start_sec=0.5, grace_sec=0.5) == "real"
+    assert _classify_underrun(is_running=True, since_start_sec=10.0, grace_sec=0.5) == "real"
+    print("  [PASS] test 5: running underruns classify as startup within the grace window, "
+          "real once past it (verdict is unaffected by in-window ones, fails on out-of-window ones)")
+
+    print("live/pipeline.py self-test -- ALL PASSED")
 
 
 def _main():
@@ -699,7 +1010,16 @@ def _main():
         action="store_true",
         help="Log per-chunk inference timing to stderr",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run Mode A self-test (priming/underrun logic, no hardware) and exit",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        _self_test()
+        return
 
     if args.list_devices:
         _list_devices()

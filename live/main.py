@@ -25,10 +25,12 @@ def main():
     )
     parser.add_argument(
         "subcommand",
-        choices=["detect", "pipeline", "latency", "stress", "demo"],
+        choices=["detect", "pipeline", "latency", "stress", "demo", "calibrate", "acoustic-latency"],
         help="Subcommand to execute: 'detect' (enumerate hardware), "
              "'pipeline' (run stream), 'latency' (click loopback test), "
-             "'stress' (10-minute gate), 'demo' (terminal TUI dashboard)."
+             "'stress' (10-minute gate), 'demo' (terminal TUI dashboard), "
+             "'calibrate' (measure primary/reference mic pair delay, Phase 1), "
+             "'acoustic-latency' (physical acoustic round-trip / DFN3 lookahead, Phase 2 A5/A6)."
     )
     
     # Parse the subcommand, leaving the rest for the target subcommand script.
@@ -52,6 +54,12 @@ def main():
     elif args.subcommand == "demo":
         from demo.dashboard import main as dashboard_main
         dashboard_main()
+    elif args.subcommand == "calibrate":
+        from live.calibrate_mic_pair import main as calibrate_main
+        calibrate_main()
+    elif args.subcommand == "acoustic-latency":
+        from live.acoustic_latency_test import main as acoustic_latency_main
+        acoustic_latency_main()
 
 if __name__ == "__main__":
     main()
