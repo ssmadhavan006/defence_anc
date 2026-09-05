@@ -63,6 +63,12 @@ TESTS = [
     ("noise_classifier",  [sys.executable, "models/noise_classifier/classify_chunk.py", "--self-test"], False, None),
     ("webdash",           [sys.executable, "demo/webdash/app.py", "--self-test"], False, "fastapi"),
     ("dnsmos",            [sys.executable, "models/dnsmos/dnsmos_infer.py", "--self-test"], False, "onnxruntime"),
+    # Dashboard rebuild (stage taps/metrics/comparison mode) self-tests -- all Mode A.
+    # compare: SKIPs if results/eval_raw.csv doesn't exist yet (run the eval pipeline first).
+    ("stage_taps",        [sys.executable, "live/stage_taps.py", "--self-test"], False, None),
+    ("stage_metrics",     [sys.executable, "live/stage_metrics.py", "--self-test"], False, None),
+    ("webdash_compare",   [sys.executable, "demo/webdash/compare.py", "--self-test"], False, "fastapi"),
+    ("webdash_record_compare", [sys.executable, "demo/webdash/record_compare.py", "--self-test"], True, "fastapi"),
     # Phase 5 (demo bulletproofing) self-tests -- all Mode A, no hardware.
     # backup_playback: builds a real (short) clip from the real corpus, so it
     # needs data/clean + data/noise/{stationary/engine,impulsive/gunshot} on

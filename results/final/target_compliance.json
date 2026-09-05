@@ -17,8 +17,8 @@
     },
     "impulsive": {
       "explosion": 40,
-      "artillery": 34,
-      "gunshot": 26
+      "artillery": 35,
+      "gunshot": 25
     }
   },
   "targets": {
@@ -77,58 +77,58 @@
       "PESQ_WB_margin": 0.0448
     },
     "impulsive": {
-      "SI_SNR_dB_mean": 15.2402,
+      "SI_SNR_dB_mean": 15.7417,
       "SI_SNR_dB_pass": true,
       "SI_SNR_dB_verdict": "PASS",
       "SI_SNR_dB_n": 100,
       "SI_SNR_dB_excluded": 0,
-      "SI_SNR_dB_margin": 0.2402,
-      "STOI_mean": 0.9194,
+      "SI_SNR_dB_margin": 0.7417,
+      "STOI_mean": 0.9318,
       "STOI_pass": true,
       "STOI_verdict": "PASS",
       "STOI_n": 100,
       "STOI_excluded": 0,
-      "STOI_margin": 0.0694,
-      "PESQ_WB_mean": 2.5428,
+      "STOI_margin": 0.0818,
+      "PESQ_WB_mean": 2.6492,
       "PESQ_WB_pass": true,
       "PESQ_WB_verdict": "PASS",
       "PESQ_WB_n": 100,
       "PESQ_WB_excluded": 0,
-      "PESQ_WB_margin": 0.0428
+      "PESQ_WB_margin": 0.1492
     }
   },
   "per_subtype": {
     "impulsive/artillery": {
-      "SI_SNR_dB_mean": 14.4048,
-      "SI_SNR_dB_n": 34,
+      "SI_SNR_dB_mean": 17.0867,
+      "SI_SNR_dB_n": 35,
       "SI_SNR_dB_excluded": 0,
-      "STOI_mean": 0.9088,
-      "STOI_n": 34,
+      "STOI_mean": 0.9566,
+      "STOI_n": 35,
       "STOI_excluded": 0,
-      "PESQ_WB_mean": 2.5117,
-      "PESQ_WB_n": 34,
+      "PESQ_WB_mean": 2.9538,
+      "PESQ_WB_n": 35,
       "PESQ_WB_excluded": 0
     },
     "impulsive/explosion": {
-      "SI_SNR_dB_mean": 15.8937,
+      "SI_SNR_dB_mean": 15.3804,
       "SI_SNR_dB_n": 40,
       "SI_SNR_dB_excluded": 0,
-      "STOI_mean": 0.9282,
+      "STOI_mean": 0.9211,
       "STOI_n": 40,
       "STOI_excluded": 0,
-      "PESQ_WB_mean": 2.5954,
+      "PESQ_WB_mean": 2.5225,
       "PESQ_WB_n": 40,
       "PESQ_WB_excluded": 0
     },
     "impulsive/gunshot": {
-      "SI_SNR_dB_mean": 15.3273,
-      "SI_SNR_dB_n": 26,
+      "SI_SNR_dB_mean": 14.4369,
+      "SI_SNR_dB_n": 25,
       "SI_SNR_dB_excluded": 0,
-      "STOI_mean": 0.9198,
-      "STOI_n": 26,
+      "STOI_mean": 0.9144,
+      "STOI_n": 25,
       "STOI_excluded": 0,
-      "PESQ_WB_mean": 2.5028,
-      "PESQ_WB_n": 26,
+      "PESQ_WB_mean": 2.4255,
+      "PESQ_WB_n": 25,
       "PESQ_WB_excluded": 0
     },
     "non_stationary/aircraft": {

@@ -93,3 +93,31 @@ qrcode[pil]>=7.4
 # they share the same package name. Install the right version separately:
 #   Python 3.9 (dev):   pip install onnxruntime==1.18.0
 #   Python 3.13 (Pi):   pip install "onnxruntime>=1.18.0"
+
+# --- Dashboard rebuild (2026-09-05): reference-replay Mode 2 + Record & Compare ---
+# live/stage_metrics.py imports eval/metrics.py's compute_stoi/compute_pesq_wb,
+# which need pystoi/pesq (guarded at CALL time, not import time, so a missing
+# package degrades that one metric to None with a one-time stderr warning --
+# see live/stage_metrics.py's _warn_missing_dep_once -- rather than crashing).
+# demo/webdash/record_compare.py imports baselines/spectral_subtraction and
+# baselines/wiener directly, which need `scipy` -- already pinned above
+# (scipy==1.17.0) for the P1-4 augmentation section; no new scipy line needed.
+#
+# pystoi: pure Python, universal wheel, no compiler needed. Low risk.
+pystoi>=0.4.1
+#
+# pesq: PyPI publishes ONLY a source sdist (verified 2026-09-05, no wheel for
+# ANY platform) -- it's a C extension, always built from source. Needs a C
+# compiler; Raspberry Pi OS may not have one by default:
+#   sudo apt install -y build-essential
+# ⚠️ NOT YET VERIFIED ON THIS PI'S aarch64/Python 3.13 (Rule 29) -- if the
+# build fails, reference-replay's PESQ-WB cell degrades to None (the
+# _warn_missing_dep_once warning above) while SI-SNR/STOI keep working; it is
+# not a blocker for the rest of the dashboard.
+pesq>=0.0.4
+#
+# httpx: only needed to run this project's own --self-test suites for
+# webdash/compare/record_compare (starlette.testclient's TestClient uses it).
+# NOT needed at runtime -- skip this line if you only intend to run the demo,
+# not `python scripts/run_all_selftests.py`, on the Pi.
+httpx>=0.28.1

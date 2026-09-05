@@ -14,9 +14,19 @@ import sys
 import urllib.request
 
 _MODEL_URL = (
-    "https://github.com/microsoft/DNS-Challenge/raw/5e8a990/"
+    "https://github.com/microsoft/DNS-Challenge/raw/591184a9fcb2cbdec02520fed81a32bbbf9d73ff/"
     "DNSMOS/DNSMOS/sig_bak_ovr.onnx"
 )
+# NOTE (2026-09-05): the originally-pinned commit 5e8a990 (2022-05-10) no longer
+# exists anywhere in the upstream repo's history (GitHub API returns "No commit
+# found for SHA" -- confirmed via `curl api.github.com/repos/microsoft/DNS-Challenge/commits/5e8a990`),
+# most likely a force-push history rewrite upstream, not something recoverable
+# from this side. Re-pinned to the current master HEAD at time of writing.
+# IMPORTANT: this file is ~1.1 MB, not the ~4.8 MB originally recorded in
+# SOURCES.md for the 2022 commit -- it may be a retrained/updated checkpoint,
+# not byte-identical to what this project originally validated against. See
+# SOURCES.md for the full note; re-verify DNSMOS output sanity (dnsmos_infer.py
+# --self-test's 440Hz-sine in-range check) after ever re-pinning this URL again.
 _MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 _MODEL_PATH = os.path.join(_MODEL_DIR, "sig_bak_ovr.onnx")
 

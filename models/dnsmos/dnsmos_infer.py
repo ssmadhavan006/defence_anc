@@ -144,6 +144,78 @@ def _resample_to_16k(audio_48k: np.ndarray, sr_in: int = 48_000) -> np.ndarray:
     return np.interp(x_in, np.arange(len(audio_48k)), audio_48k).astype(np.float32)
 
 
+def _infer_window(session, audio_48k: np.ndarray):
+    """Run one DNSMOS forward pass on a single ~9.01s window; return (sig, bak, ovr)
+    in [1, 5]. Shared by DNSMOSMonitor (live, streaming) and score_file() (offline,
+    one-shot) so both use exactly the same preprocessing/postprocessing."""
+    audio_16k = _resample_to_16k(audio_48k)
+    mel = _audio_to_melspec(audio_16k)  # (n_frames, N_MELS)
+    inp = mel[np.newaxis, np.newaxis, :, :]  # (1, 1, n_frames, N_MELS)
+    out = session.run(None, {"input_1": inp.astype(np.float32)})[0]
+    # out shape: (1, 3) or (1, 1, 3) — flatten to 3 values
+    vals = out.flatten()[:3]
+    return _polyfit(float(vals[0]), float(vals[1]), float(vals[2]))
+
+
+def score_file(path: str, model_dir: str = None) -> dict:
+    """
+    One-shot, non-intrusive DNSMOS scoring of a whole audio file -- no clean
+    reference needed. This is the only quality axis available for an ad-hoc
+    live recording (demo/webdash/record_compare.py's "Record & Compare" mode):
+    a fresh recording has no ground truth to score SI-SNR/STOI/PESQ-WB against,
+    but DNSMOS estimates perceptual quality from the signal alone.
+
+    Splits the file into non-overlapping _WINDOW_SEC windows (padding a short
+    final window with silence) and averages SIG/BAK/OVR across them, so a
+    result reflects the whole clip rather than just its first ~9 seconds.
+
+    Raises ImportError if onnxruntime isn't installed, FileNotFoundError if
+    the model hasn't been downloaded (models/dnsmos/download_model.py) --
+    callers should catch both and treat DNSMOS as unavailable (grey it out),
+    exactly like DNSMOSMonitor._loop() does for the live path.
+    """
+    import onnxruntime as ort
+    import soundfile as sf
+
+    model_dir = model_dir or os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(model_dir, "sig_bak_ovr.onnx")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"DNSMOS model not found: {model_path}\nRun: python models/dnsmos/download_model.py"
+        )
+    session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+
+    audio, sr = sf.read(path, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    if sr != 48_000:
+        # Resample to 48 kHz first (this function's internal pipeline expects
+        # 48 kHz windows, then does its own 48k->16k step via _resample_to_16k).
+        ratio = sr / 48_000
+        n_out = int(len(audio) / ratio)
+        audio = np.interp(np.arange(n_out, dtype=np.float64) * ratio,
+                           np.arange(len(audio)), audio).astype(np.float32)
+
+    window_samples_48k = int(_WINDOW_SEC * 48_000)
+    if len(audio) < window_samples_48k:
+        audio = np.pad(audio, (0, window_samples_48k - len(audio)))
+
+    sigs, baks, ovrs = [], [], []
+    for start in range(0, len(audio), window_samples_48k):
+        window = audio[start:start + window_samples_48k]
+        if len(window) < window_samples_48k:
+            window = np.pad(window, (0, window_samples_48k - len(window)))
+        sig, bak, ovr = _infer_window(session, window)
+        sigs.append(sig); baks.append(bak); ovrs.append(ovr)
+
+    return {
+        "sig": round(float(np.mean(sigs)), 3),
+        "bak": round(float(np.mean(baks)), 3),
+        "ovr": round(float(np.mean(ovrs)), 3),
+        "n_windows": len(sigs),
+    }
+
+
 # ---------------------------------------------------------------------------
 # DNSMOSMonitor — background thread
 # ---------------------------------------------------------------------------
@@ -198,13 +270,7 @@ class DNSMOSMonitor:
 
     def _infer(self, audio_48k: np.ndarray):
         """Run DNSMOS inference; return (sig, bak, ovr) in [1, 5]."""
-        audio_16k = _resample_to_16k(audio_48k)
-        mel = _audio_to_melspec(audio_16k)  # (n_frames, N_MELS)
-        inp = mel[np.newaxis, np.newaxis, :, :]  # (1, 1, n_frames, N_MELS)
-        out = self._session.run(None, {"input_1": inp.astype(np.float32)})[0]
-        # out shape: (1, 3) or (1, 1, 3) — flatten to 3 values
-        vals = out.flatten()[:3]
-        return _polyfit(float(vals[0]), float(vals[1]), float(vals[2]))
+        return _infer_window(self._session, audio_48k)
 
     def _loop(self):
         self._running = True
@@ -288,7 +354,17 @@ def _run_selftest():
     print(f"Mel spectrogram shape: {mel.shape}")
 
     inp = mel[np.newaxis, np.newaxis, :, :].astype(np.float32)
-    out = session.run(None, {"input_1": inp})[0]
+    try:
+        out = session.run(None, {"input_1": inp})[0]
+    except Exception as exc:
+        print(f"[FAIL] models/dnsmos/dnsmos_infer.py self-test: model at {model_path!r} "
+              f"rejected the expected input shape {inp.shape} ({exc}). This means the vendored "
+              f"sig_bak_ovr.onnx is NOT the model this module's preprocessing was written for -- "
+              f"see the note in models/dnsmos/download_model.py (2026-09-05: the originally-pinned "
+              f"upstream commit was permanently lost to a history rewrite; the current commit at "
+              f"the same path is a different, incompatible model). Do not use this file until the "
+              f"preprocessing is updated to match it or a compatible model is sourced instead.")
+        sys.exit(1)
     vals = out.flatten()[:3]
     sig, bak, ovr = _polyfit(float(vals[0]), float(vals[1]), float(vals[2]))
 
@@ -297,6 +373,30 @@ def _run_selftest():
     assert 1.0 <= ovr <= 5.0, f"OVR out of range: {ovr}"
 
     print(f"DNSMOS on 440Hz sine: SIG={sig:.3f} BAK={bak:.3f} OVR={ovr:.3f}")
+
+    # score_file(): whole-file, one-shot scoring for record_compare.py's
+    # "Record & Compare" mode (no clean reference exists for a live recording,
+    # so DNSMOS is the only quality axis available there).
+    import tempfile
+    import soundfile as sf
+
+    tmp_dir = tempfile.mkdtemp(prefix="dnsmos_selftest_")
+    try:
+        t2 = np.linspace(0, 20.0, int(20.0 * 48_000), endpoint=False, dtype=np.float32)
+        audio_48k = (np.sin(2 * np.pi * 440 * t2) * 0.5).astype(np.float32)
+        clip_path = os.path.join(tmp_dir, "clip.wav")
+        sf.write(clip_path, audio_48k, 48_000)
+
+        result = score_file(clip_path)
+        assert 1.0 <= result["sig"] <= 5.0 and 1.0 <= result["bak"] <= 5.0 and 1.0 <= result["ovr"] <= 5.0
+        # 20s clip / 9.01s windows -> ceil(20/9.01) = 3 windows
+        assert result["n_windows"] == 3, f"expected 3 windows for a 20s clip, got {result['n_windows']}"
+        print(f"  [PASS] score_file(): {result['n_windows']} windows averaged, "
+              f"SIG={result['sig']} BAK={result['bak']} OVR={result['ovr']}")
+    finally:
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("[PASS] models/dnsmos/dnsmos_infer.py self-test")
 
 

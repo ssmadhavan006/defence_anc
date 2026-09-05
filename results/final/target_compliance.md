@@ -13,7 +13,7 @@ No averaging across categories. Each cell is a per-category mean over all five i
 |---|---|---|---|
 | `stationary` | 16.1093 (PASS) | 0.9128 (PASS) | 2.5385 (PASS) |
 | `non_stationary` | 14.1758 (FAIL) | 0.9027 (PASS) | 2.5448 (PASS) |
-| `impulsive` | 15.2402 (PASS) | 0.9194 (PASS) | 2.5428 (PASS) |
+| `impulsive` | 15.7417 (PASS) | 0.9318 (PASS) | 2.6492 (PASS) |
 
 ## Dataset composition
 
@@ -24,9 +24,9 @@ No averaging across categories. Each cell is a per-category mean over all five i
 | `non_stationary` | `aircraft` | 36 |
 | `non_stationary` | `helicopter` | 36 |
 | `non_stationary` | `wind` | 28 |
-| `impulsive` | `artillery` | 34 |
+| `impulsive` | `artillery` | 35 |
 | `impulsive` | `explosion` | 40 |
-| `impulsive` | `gunshot` | 26 |
+| `impulsive` | `gunshot` | 25 |
 
 ## Per-subtype breakdown
 
@@ -35,9 +35,9 @@ how the v1 `crowd` defect stayed invisible behind a `non_stationary` average.
 
 | Subtype | SI-SNR (dB) | STOI | PESQ-WB | n |
 |---|---|---|---|---|
-| `impulsive/artillery` | 14.4048 | 0.9088 | 2.5117 | 34 |
-| `impulsive/explosion` | 15.8937 | 0.9282 | 2.5954 | 40 |
-| `impulsive/gunshot` | 15.3273 | 0.9198 | 2.5028 | 26 |
+| `impulsive/artillery` | 17.0867 | 0.9566 | 2.9538 | 35 |
+| `impulsive/explosion` | 15.3804 | 0.9211 | 2.5225 | 40 |
+| `impulsive/gunshot` | 14.4369 | 0.9144 | 2.4255 | 25 |
 | `non_stationary/aircraft` | 14.4084 | 0.9097 | 2.5461 | 36 |
 | `non_stationary/helicopter` | 14.2873 | 0.8992 | 2.4939 | 36 |
 | `non_stationary/wind` | 13.7335 | 0.8982 | 2.6085 | 28 |

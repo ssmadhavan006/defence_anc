@@ -61,6 +61,7 @@ import sounddevice as sd
 from live.ring_buffer import RingBuffer
 from live.inference_engine import InferenceEngine
 from live.cpu_affinity import set_thread_affinity
+from live.stage_taps import StageTaps
 # NOTE: live.fast_resample IS imported at module scope (unlike residual_filter
 # / reference_nlms below) because it degrades gracefully on its own -- it is
 # importable without numba (see its module docstring) and only raises if
@@ -386,9 +387,26 @@ class LivePipeline:
         from a dead mic with this one flag while judges still hear the real
         pipeline. Dual-mic reference capture is also skipped in this mode
         (there is no live reference either) -- see start().
+    clean_ref_path : str or None
+        Dashboard "reference replay" mode. Only meaningful together with
+        backup_audio_path pointing at a mixture WAV -- this is that mixture's
+        sample-aligned clean speech track (e.g. the `*_clean_ref.wav` files
+        eval/run_eval.py and demo/backup_playback.py both produce next to
+        their mixture/backup WAV). No cross-correlation alignment is needed:
+        BackupAudioSource.read_chunk() is called exactly once per chunk from
+        a single feeder thread, in strict FIFO order, into the same ring
+        buffer the inference loop drains one-for-one -- so the Nth capture
+        chunk always corresponds to the Nth chunk_samples segment of BOTH
+        files. _inference_loop() advances a matching cursor into the clean
+        reference in lockstep with the mixture, exposed as
+        current_clean_ref_chunk for live/stage_metrics.py to pair against
+        the real (non-intrusive) output. See live/stage_metrics.py for what
+        this unlocks: true SI-SNR/STOI/PESQ-WB on live pipeline output,
+        which is otherwise impossible without a clean reference.
     """
 
-    def __init__(self, config: dict, mode_override: str = None, backup_audio_path: str = None):
+    def __init__(self, config: dict, mode_override: str = None, backup_audio_path: str = None,
+                 clean_ref_path: str = None):
         audio_cfg = config["audio"]
         model_cfg = config["model"]
         pipe_cfg = config["pipeline"]
@@ -396,6 +414,15 @@ class LivePipeline:
         self._backup_audio_path = backup_audio_path or audio_cfg.get("backup_playback_path", None)
         self._backup_source = None
         self._backup_thread = None
+
+        # Reference-replay mode (dashboard D2/Mode 2) -- see clean_ref_path
+        # docstring above. Only takes effect when backup_audio_path is also
+        # set; loaded fully into memory in start() (demo clips are short).
+        self._clean_ref_path = clean_ref_path
+        self._clean_ref_audio = None   # full array at self._sr, set in start()
+        self._clean_ref_pos = 0
+        self.current_clean_ref_chunk = None   # mono float32, aligned to last_in_chunk
+        self.reference_available = False      # True once _clean_ref_audio is loaded
 
         self._sr = int(audio_cfg["sample_rate"])
         self._channels = int(audio_cfg["channels"])
@@ -534,6 +561,11 @@ class LivePipeline:
         self.last_in_chunk = None    # mono float32, shape (chunk_samples,)
         self.last_out_chunk = None   # mono float32, shape (chunk_samples,)
 
+        # Per-stage taps for the dashboard's signal-chain visualisation
+        # (live/stage_taps.py). Same benign display-only race as the two
+        # attributes above -- never read on the audio path.
+        self.stage_taps = StageTaps()
+
     # ------------------------------------------------------------------
     # Audio callbacks (called from sounddevice's internal C thread)
     # ------------------------------------------------------------------
@@ -653,6 +685,25 @@ class LivePipeline:
                     file=sys.stderr,
                 )
 
+    def _next_clean_ref_chunk(self) -> np.ndarray:
+        """
+        Pull the next chunk_samples-length segment of the loaded clean
+        reference, advancing/looping in lockstep with BackupAudioSource's
+        own read_chunk() cursor logic (same take/pad/wrap behaviour) so the
+        two stay sample-aligned across an arbitrary number of loop wraps.
+        """
+        audio = self._clean_ref_audio
+        remaining = len(audio) - self._clean_ref_pos
+        if remaining <= 0:
+            self._clean_ref_pos = 0
+            remaining = len(audio)
+        take = min(self._chunk_samples, remaining)
+        seg = audio[self._clean_ref_pos:self._clean_ref_pos + take]
+        self._clean_ref_pos += take
+        if take < self._chunk_samples:
+            seg = np.pad(seg, (0, self._chunk_samples - take))
+        return seg
+
     def _inference_loop(self):
         """
         Consumer thread: read chunks from in_buf, enhance, write to out_buf.
@@ -687,6 +738,10 @@ class LivePipeline:
                 # InferenceEngine expects (n_samples,) or (1, n_samples) mono.
                 mono = chunk[:, 0]   # Take channel 0; DeepFilterNet is single-channel.
                 self.last_in_chunk = mono
+                self.stage_taps.capture = mono
+
+                if self._clean_ref_audio is not None:
+                    self.current_clean_ref_chunk = self._next_clean_ref_chunk()
 
                 # Read reference channel, applying delay compensation.
                 ref_mono = None
@@ -717,6 +772,7 @@ class LivePipeline:
                         and self._ref_nlms_stage == "pre_dfn"):
                     mono = self._ref_nlms.process_chunk(mono, ref_mono)
                     self._erle_db_last = self._ref_nlms.erle_db()
+                    self.stage_taps.pre_filter = mono
 
                 t0 = time.perf_counter()
                 if self._mode == "enhance":
@@ -745,10 +801,12 @@ class LivePipeline:
                     out_mono = out_mono[:self._chunk_samples]
                 else:
                     out_mono = np.pad(out_mono, (0, self._chunk_samples - len(out_mono)))
+                self.stage_taps.dfn_core = out_mono
 
                 # P1-1 residual ALE stage (reference-free, runs on DFN3 output).
                 if self._mode == "enhance" and self._residual_filter is not None:
                     out_mono = self._residual_filter.process_chunk(out_mono)
+                    self.stage_taps.residual = out_mono
 
                 # Phase 1 post-DFN reference NLMS stage.
                 if (self._mode == "enhance"
@@ -768,6 +826,7 @@ class LivePipeline:
                 out_mono = np.zeros(self._chunk_samples, dtype=np.float32)
 
             self.last_out_chunk = out_mono
+            self.stage_taps.output = out_mono
             self._out_buf.write(out_mono[:, np.newaxis])
 
         print("[pipeline] Inference thread exiting.", file=sys.stderr)
@@ -886,6 +945,23 @@ class LivePipeline:
                 file=sys.stderr,
             )
             self._in_stream_sr = self._sr  # file is pre-resampled by BackupAudioSource
+
+            if self._clean_ref_path:
+                import soundfile as sf
+                ref_data, ref_sr = sf.read(self._clean_ref_path, dtype="float32")
+                if ref_data.ndim > 1:
+                    ref_data = ref_data[:, 0]
+                if ref_sr != self._sr:
+                    ref_data = _resample(ref_data, ref_sr, self._sr)
+                self._clean_ref_audio = ref_data.astype(np.float32)
+                self._clean_ref_pos = 0
+                self.reference_available = True
+                print(
+                    f"[pipeline] *** REFERENCE REPLAY MODE *** — clean reference loaded "
+                    f"({len(self._clean_ref_audio) / self._sr:.1f}s, {self._clean_ref_path!r}). "
+                    f"Intrusive metrics (SI-SNR/STOI/PESQ-WB) are now computable on live output.",
+                    file=sys.stderr,
+                )
         else:
             # Normal mode — resolve and open the real input device.
             in_dev = _resolve_device(self._in_device, kind="input")
@@ -1158,6 +1234,29 @@ def _self_test():
     print("  [PASS] test 10: LivePipeline constructor wires backup_audio_path and "
           "health_check config correctly (no hardware touched)")
 
+    # --- Test 11: stage_taps starts fresh (all None) on construction ---
+    from live.stage_taps import STAGE_NAMES
+    assert all(getattr(p.stage_taps, n) is None for n in STAGE_NAMES)
+    assert p.reference_available is False and p.current_clean_ref_chunk is None
+    print("  [PASS] test 11: stage_taps and reference_available start unpopulated")
+
+    # --- Test 12: clean-ref chunk cursor loops in lockstep with BackupAudioSource's
+    # own read_chunk() wraparound (same take/pad/wrap arithmetic) ---
+    p._chunk_samples = 10
+    p._sr = 100
+    p._clean_ref_audio = np.arange(25, dtype=np.float32)   # 25 samples -> 2 full + 1 partial chunk
+    p._clean_ref_pos = 0
+    c1 = p._next_clean_ref_chunk()
+    c2 = p._next_clean_ref_chunk()
+    c3 = p._next_clean_ref_chunk()   # only 5 samples remain -> padded with zeros
+    c4 = p._next_clean_ref_chunk()   # wrapped back to position 0
+    assert np.array_equal(c1, np.arange(0, 10))
+    assert np.array_equal(c2, np.arange(10, 20))
+    assert np.array_equal(c3, np.concatenate([np.arange(20, 25), np.zeros(5, dtype=np.float32)]))
+    assert np.array_equal(c4, np.arange(0, 10))
+    print("  [PASS] test 12: clean-ref cursor advances, pads a short final chunk, "
+          "and wraps back to the start -- byte-identical to BackupAudioSource.read_chunk()")
+
     print("live/pipeline.py self-test -- ALL PASSED")
 
 
@@ -1196,6 +1295,14 @@ def _main():
              "hardware is still used -- only the input side is replaced.",
     )
     parser.add_argument(
+        "--clean-ref",
+        default=None,
+        metavar="WAV_PATH",
+        help="Dashboard reference-replay mode: the clean reference WAV sample-aligned "
+             "with --backup's mixture (e.g. its *_clean_ref.wav). Only takes effect "
+             "together with --backup. Unlocks true SI-SNR/STOI/PESQ-WB on live output.",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run Mode A self-test (priming/underrun logic, no hardware) and exit",
@@ -1214,7 +1321,8 @@ def _main():
     if args.log_timing:
         config["pipeline"]["log_timing"] = True
 
-    pipeline = LivePipeline(config, mode_override=args.mode, backup_audio_path=args.backup)
+    pipeline = LivePipeline(config, mode_override=args.mode, backup_audio_path=args.backup,
+                             clean_ref_path=args.clean_ref)
     pipeline.run_blocking()
 
 

@@ -2,13 +2,19 @@
 scripts/deploy_to_pi.py — Bundles and deploys live pipeline code to the Raspberry Pi 5.
 
 Features:
-- Bundles live/, config/, demo/, models/deepfilternet/, requirements.txt.
-- Excludes heavy data/ datasets, classical baselines, evaluations, and .venv/ files.
+- Bundles live/, config/, demo/, models/deepfilternet/, models/noise_classifier/,
+  models/dnsmos/, eval/, baselines/, requirements.txt.
+- Excludes .venv/ and other build/VCS clutter. Excludes the ~1.2 GB corpus +
+  baseline audio + eval_raw.csv by default (opt in with --with-corpus) --
+  everything else here is small, code-only, and always needed for imports
+  to succeed (see bundle_deployment()'s comment for exactly which new
+  dashboard modules need which directory).
 - Generates a lightweight zip archive (pi_deploy.zip).
 - Provides copy instructions or automates via scp.
 
 Usage:
     python scripts/deploy_to_pi.py --host raspberrypi.local --user codefather
+    python scripts/deploy_to_pi.py --with-corpus   # also bundle the corpus for Compare Methods
 """
 
 import os
@@ -23,16 +29,37 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-def bundle_deployment():
+def bundle_deployment(with_corpus: bool = False):
     zip_path = os.path.join(_REPO_ROOT, "pi_deploy.zip")
     print(f"Creating clean deployment bundle: {zip_path}")
-    
-    # Files/folders to include
-    includes = ["live", "config", "demo", "models/deepfilternet", "requirements.txt",
+
+    # Files/folders to include. Dashboard rebuild (2026-09-05) added real
+    # imports the old lightweight bundle never carried:
+    #   - live/stage_metrics.py imports eval/metrics.py (SI-SNR/STOI/PESQ-WB)
+    #   - demo/webdash/record_compare.py imports baselines/spectral_subtraction
+    #     and baselines/wiener (single-file classical DSP, no manifest needed)
+    #   - demo/webdash/app.py's main() imports models/noise_classifier and
+    #     models/dnsmos WHEN their config.*.enabled flags are true
+    # All four are small code-only dirs (no large audio), so they're in the
+    # default bundle now -- a config flag enabling the classifier/DNSMOS on
+    # the Pi must not also require a manual "oh, copy this dir too" step.
+    includes = ["live", "config", "demo", "models/deepfilternet", "models/noise_classifier",
+                "models/dnsmos", "eval", "baselines", "requirements.txt",
                 "requirements-optional.txt", "README.md"]
-    
+
+    if with_corpus:
+        # The 300-mixture corpus + classical/DFN3 baseline outputs +
+        # eval_raw.csv that demo/webdash/compare.py's "Compare Methods" tab
+        # needs to serve audio + audited metrics locally on the Pi. ~1.2 GB
+        # total (measured 2026-09-05: data/mixtures 304M, results/baselines
+        # 901M, eval_raw.csv 484K) -- trivial on a 64GB SD card, opt-in only
+        # because it's a slow first copy and irrelevant if Compare Methods
+        # is being demoed from the laptop instead.
+        includes += ["data/mixtures", "results/baselines", "results/eval_raw.csv",
+                     "results/final", "data/manifest.csv"]
+
     # Files/patterns to exclude
-    excludes = ["__pycache__", ".pyc", ".git", ".venv", "eval_raw.csv", "results.csv"]
+    excludes = ["__pycache__", ".pyc", ".git", ".venv", "results.csv"]
     
     count = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -69,9 +96,13 @@ def main():
     parser.add_argument("--user", default="codefather", help="Pi SSH username (default: codefather)")
     parser.add_argument("--dest", default="~/Downloads/defence_anc", help="Destination path on Pi (default: ~/Downloads/defence_anc)")
     parser.add_argument("--push", action="store_true", help="Attempt to push the bundle automatically via scp")
+    parser.add_argument("--with-corpus", action="store_true",
+                         help="Also bundle the 300-mixture corpus + baseline outputs + eval_raw.csv "
+                              "(~1.2 GB) so demo/webdash/compare.py's Compare Methods tab works "
+                              "locally on the Pi instead of only from the dev machine.")
     args = parser.parse_args()
-    
-    zip_path = bundle_deployment()
+
+    zip_path = bundle_deployment(with_corpus=args.with_corpus)
     
     print("\n" + "=" * 60)
     print("                Pi 5 Deployment Instructions                 ")

@@ -7,6 +7,7 @@ import soundfile as sf
 try:
     from models.deepfilternet.df_compat import init_df, enhance, load_audio, save_audio
 except ImportError:
+    # pyrefly: ignore [missing-import]
     from df_compat import init_df, enhance, load_audio, save_audio
 
 def process_file(model, df_state, input_path: str, output_path: str, atten_lim_db: float = None) -> float:
