@@ -46,7 +46,6 @@ except ImportError:
     _FASTAPI_OK = False
 
 try:
-    from demo.spectrogram import _spectrum_db, _AutoGain, FREQ_BINS, MIN_HZ, MAX_HZ
     from live.stage_taps import STAGE_NAMES
     _SPECTRO_OK = True
 except ImportError:
@@ -566,7 +565,7 @@ connect();
 # ---------------------------------------------------------------------------
 # Telemetry builder
 # ---------------------------------------------------------------------------
-def _build_telemetry(pipeline, telemetry=None, stage_metrics=None, gain=None) -> dict:
+def _build_telemetry(pipeline, telemetry=None, stage_metrics=None) -> dict:
     """Build JSON-safe telemetry dict from pipeline display hooks + Phase 4 telemetry
     + Phase "dashboard" per-stage metrics/spectra (live/stage_metrics.py)."""
     latencies = list(getattr(pipeline, "_chunk_latencies", None) or [])
@@ -608,6 +607,16 @@ def _build_telemetry(pipeline, telemetry=None, stage_metrics=None, gain=None) ->
             "mos_valid": False,
         })
 
+    # Everything below (per-stage levels, suppression map, and the quantised
+    # BEFORE/AFTER display spectra) is computed ONCE per tick by
+    # live/stage_metrics.py's background thread and merely read here.
+    #
+    # It used to compute the two spectra inline, per connected client, per
+    # frame. On the Pi with 3 browsers open at 4 Hz that was ~24 FFT+binning
+    # passes/sec inside the asyncio loop, competing with the real-time
+    # inference thread for the GIL -- confirmed cause of audible breakup on
+    # Pi 5, 2026-09-05. Reading a cached value makes the cost constant in the
+    # number of viewers.
     if stage_metrics is not None:
         payload.update(stage_metrics.snapshot())
     else:
@@ -616,33 +625,8 @@ def _build_telemetry(pipeline, telemetry=None, stage_metrics=None, gain=None) ->
             "suppression_db": None,
             "metrics_mode": "non_intrusive",
             "si_snr": None, "stoi": None, "pesq_wb": None, "metrics_window_sec": None,
+            "spectrum_before": None, "spectrum_after": None,
         })
-
-    # BEFORE/AFTER spectra for the web UI's live spectrogram panels — quantised
-    # to uint8 (0-255) to keep the WebSocket payload small (see dashboard plan
-    # D3: ~2KB/frame at 4Hz). Shares ONE AutoGain instance across both panels
-    # (passed in by the caller) so AFTER visibly darkens under suppression
-    # instead of independently re-normalizing to look equally "loud" --
-    # same principle as demo/spectrogram.py's terminal version.
-    stage_taps = getattr(pipeline, "stage_taps", None)
-    if _SPECTRO_OK and gain is not None and stage_taps is not None:
-        capture = getattr(stage_taps, "capture", None)
-        output = getattr(stage_taps, "output", None)
-        sr = int(getattr(pipeline, "_sr", 48000) or 48000)
-        if capture is not None:
-            before_db = _spectrum_db(capture, sr, FREQ_BINS, MIN_HZ, MAX_HZ)
-            gain.update(before_db)
-            payload["spectrum_before"] = (gain.apply(before_db) * 255).astype(int).tolist()
-        else:
-            payload["spectrum_before"] = None
-        if output is not None:
-            after_db = _spectrum_db(output, sr, FREQ_BINS, MIN_HZ, MAX_HZ)
-            payload["spectrum_after"] = (gain.apply(after_db) * 255).astype(int).tolist()
-        else:
-            payload["spectrum_after"] = None
-    else:
-        payload["spectrum_before"] = None
-        payload["spectrum_after"] = None
 
     return payload
 
@@ -674,7 +658,6 @@ def make_app(pipeline, telemetry=None, telemetry_hz: float = 4.0, stage_metrics=
 
     app = FastAPI(title="PS26052 Live Dashboard", docs_url=None, redoc_url=None)
     _interval = 1.0 / max(telemetry_hz, 0.5)
-    _gain = _AutoGain() if _SPECTRO_OK else None
 
     if compare_app is not None:
         app.mount("/compare", compare_app)
@@ -697,7 +680,7 @@ def make_app(pipeline, telemetry=None, telemetry_hz: float = 4.0, stage_metrics=
         await websocket.accept()
         try:
             while True:
-                payload = _build_telemetry(pipeline, telemetry, stage_metrics, _gain)
+                payload = _build_telemetry(pipeline, telemetry, stage_metrics)
                 await websocket.send_text(json.dumps(payload))
                 await asyncio.sleep(_interval)
         except WebSocketDisconnect:
@@ -794,7 +777,9 @@ def _run_selftest():
     pipe2.stage_taps.capture = (0.3 * _np.ones(4800, dtype=_np.float32))
     pipe2.stage_taps.output = (0.1 * _np.ones(4800, dtype=_np.float32))
     sm = StageMetrics(pipe2, cadence_sec=0.01, window_sec=0.5, poll_sec=0.005)
-    sm._update_levels_and_suppression()   # run synchronously, no need for the thread here
+    # Run synchronously -- no need for the background thread here.
+    sm._update_levels()
+    sm._update_spectra_and_suppression()
 
     app2 = make_app(pipe2, telemetry=None, telemetry_hz=4.0, stage_metrics=sm)
     client2 = TestClient(app2, raise_server_exceptions=True)
@@ -894,18 +879,17 @@ def main():
     record_app = None
     try:
         from demo.webdash.record_compare import make_record_app
-        # Record & Compare opens its OWN short-lived input stream on demand
-        # (sounddevice.rec), independent of the pipeline's continuous mic
-        # stream above -- it reuses the same configured input_device so
-        # device selection stays consistent, but a device that's already
-        # exclusively held open by the live pipeline's InputStream may
-        # refuse a second concurrent open (hardware/driver-dependent;
-        # verify on the actual Pi ALSA config before relying on this
-        # running at the same time as a live mic session -- Rule 29).
+        # Record & Compare captures from the live pipeline's EXISTING capture
+        # tap (record_from_pipeline), not by opening the input device again.
+        # Confirmed on Pi 5 2026-09-05: ALSA refuses a second concurrent open
+        # of a device the live stream already holds -- every /record request
+        # 500'd with PaErrorCode -9985 "Device unavailable". The `device`
+        # argument below is only used in the standalone/no-pipeline case.
         record_app = make_record_app(
             device=cfg["audio"].get("input_device", None),
             sample_rate=int(cfg["audio"]["sample_rate"]),
             atten_lim_db=float(cfg["model"].get("atten_lim_db", 30.0)),
+            pipeline=pipeline,
         )
         print("[webdash] Record & Compare mode mounted at /record.")
     except Exception as exc:

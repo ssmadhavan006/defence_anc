@@ -48,7 +48,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from demo.spectrogram import _spectrum_db, FREQ_BINS, MIN_HZ, MAX_HZ
+from demo.spectrogram import _spectrum_db, _AutoGain, FREQ_BINS, MIN_HZ, MAX_HZ
 from live.stage_taps import STAGE_NAMES
 from eval.metrics import compute_si_snr, compute_stoi, compute_pesq_wb
 
@@ -84,13 +84,26 @@ class StageMetrics:
     """
 
     def __init__(self, pipeline, cadence_sec: float = 1.0, window_sec: float = 3.0,
-                 poll_sec: float = None):
+                 poll_sec: float = None, spectrum_cadence_sec: float = 0.25):
         self._pipeline = pipeline
         self._cadence_sec = cadence_sec
         self._window_sec = window_sec
+        # Spectra drive the dashboard's scrolling waterfall, so they need a
+        # faster cadence than the 1 Hz level/metric refresh -- but they are
+        # computed HERE, once per tick, rather than once per connected
+        # WebSocket client. On the Pi with 3 clients connected the old
+        # per-client computation was ~24 _spectrum_db() calls/sec competing
+        # with the real-time inference thread; this makes the cost constant
+        # in the number of viewers (2 calls per tick, whoever is watching).
+        self._spectrum_cadence_sec = spectrum_cadence_sec
         chunk_sec = float(getattr(pipeline, "_chunk_sec", 0.1) or 0.1)
         self._poll_sec = poll_sec if poll_sec is not None else max(0.01, chunk_sec / 2.0)
         self._sr = int(getattr(pipeline, "_sr", 48000) or 48000)
+        # One shared auto-gain across BOTH panels, driven by the BEFORE
+        # signal -- same principle as demo/spectrogram.py's terminal version,
+        # so AFTER visibly darkens under suppression instead of independently
+        # re-normalising to look equally loud.
+        self._gain = _AutoGain()
 
         self._window_samples = int(round(window_sec * self._sr))
         self._out_buf = np.zeros(self._window_samples, dtype=np.float32)
@@ -107,6 +120,10 @@ class StageMetrics:
         self.stage_levels_db = {name: None for name in STAGE_NAMES}
         self.suppression_db = None          # list[float], capture -> output
         self.suppression_bins = FREQ_BINS
+        # Quantised (uint8 0-255) display spectra, computed here once per
+        # tick and read by every WebSocket client -- see __init__'s note.
+        self.spectrum_before = None
+        self.spectrum_after = None
         self.metrics_mode = "non_intrusive"  # or "reference_backed"
         self.si_snr = None
         self.stoi = None
@@ -138,19 +155,37 @@ class StageMetrics:
         self._running = False
 
     # ------------------------------------------------------------------
-    def _update_levels_and_suppression(self):
+    def _update_levels(self):
+        """Cheap per-stage RMS only (no FFTs) -- runs at cadence_sec."""
         taps = self._pipeline.stage_taps.snapshot()
         for name in STAGE_NAMES:
             chunk = taps.get(name)
             self.stage_levels_db[name] = round(_rms_db(chunk), 1) if chunk is not None else None
 
-        capture, output = taps.get("capture"), taps.get("output")
-        if capture is not None and output is not None:
-            self.suppression_db = np.round(
-                compute_suppression_db(capture, output, self._sr), 1
-            ).tolist()
-        else:
+    def _update_spectra_and_suppression(self):
+        """
+        The only place in the whole dashboard that calls _spectrum_db().
+        Computes the BEFORE/AFTER spectra ONCE, then derives both the
+        suppression map and the quantised display spectra from those same
+        two arrays -- so the total cost is 2 FFT+bin passes per tick no
+        matter how many browsers are connected.
+        """
+        capture = self._pipeline.stage_taps.capture
+        output = self._pipeline.stage_taps.output
+        if capture is None or output is None:
             self.suppression_db = None
+            self.spectrum_before = None
+            self.spectrum_after = None
+            return
+
+        before_db = _spectrum_db(capture, self._sr, FREQ_BINS, MIN_HZ, MAX_HZ)
+        after_db = _spectrum_db(output, self._sr, FREQ_BINS, MIN_HZ, MAX_HZ)
+
+        self.suppression_db = np.round(after_db - before_db, 1).tolist()
+
+        self._gain.update(before_db)
+        self.spectrum_before = (self._gain.apply(before_db) * 255).astype(int).tolist()
+        self.spectrum_after = (self._gain.apply(after_db) * 255).astype(int).tolist()
 
     def _accumulate_reference_window(self) -> bool:
         """
@@ -202,7 +237,8 @@ class StageMetrics:
         self._buf_fill = half
 
     def _loop(self):
-        next_score_check = time.monotonic()
+        next_level_check = time.monotonic()
+        next_spectrum_check = time.monotonic()
         while self._running:
             time.sleep(self._poll_sec)
 
@@ -219,12 +255,19 @@ class StageMetrics:
                     print(f"[stage_metrics] reference scoring error: {exc}", file=sys.stderr)
 
             now = time.monotonic()
-            if now >= next_score_check:
+            if now >= next_level_check:
                 try:
-                    self._update_levels_and_suppression()
+                    self._update_levels()
                 except Exception as exc:
-                    print(f"[stage_metrics] level/suppression error: {exc}", file=sys.stderr)
-                next_score_check = now + self._cadence_sec
+                    print(f"[stage_metrics] level error: {exc}", file=sys.stderr)
+                next_level_check = now + self._cadence_sec
+
+            if now >= next_spectrum_check:
+                try:
+                    self._update_spectra_and_suppression()
+                except Exception as exc:
+                    print(f"[stage_metrics] spectrum/suppression error: {exc}", file=sys.stderr)
+                next_spectrum_check = now + self._spectrum_cadence_sec
 
             self.last_updated = now
 
@@ -233,6 +276,8 @@ class StageMetrics:
             "stage_levels_db": dict(self.stage_levels_db),
             "suppression_db": self.suppression_db,
             "suppression_bins": self.suppression_bins,
+            "spectrum_before": self.spectrum_before,
+            "spectrum_after": self.spectrum_after,
             "metrics_mode": self.metrics_mode,
             "reference_available": self.metrics_mode == "reference_backed",
             "si_snr": self.si_snr,
@@ -271,12 +316,25 @@ def _self_test():
     pipe.stage_taps.capture = noisy
     pipe.stage_taps.output = speech  # simulates near-total noise removal
     sm = StageMetrics(pipe, cadence_sec=0.05, window_sec=1.0, poll_sec=0.01)
-    sm._update_levels_and_suppression()
+    sm._update_levels()
+    sm._update_spectra_and_suppression()
     assert sm.stage_levels_db["capture"] is not None and sm.stage_levels_db["pre_filter"] is None
     assert sm.suppression_db is not None and len(sm.suppression_db) == FREQ_BINS
     assert np.mean(sm.suppression_db) < 0, "output is quieter than input -> suppression should be negative"
     print(f"  [PASS] test 1: non-intrusive levels populate only tapped stages; "
           f"suppression mean={np.mean(sm.suppression_db):.1f} dB (negative, as expected)")
+
+    # --- Test 1b: display spectra are produced HERE (once per tick), quantised
+    # to uint8 range, so demo/webdash/app.py never recomputes them per client.
+    snap = sm.snapshot()
+    for key in ("spectrum_before", "spectrum_after"):
+        assert snap[key] is not None and len(snap[key]) == FREQ_BINS, f"{key} missing/wrong length"
+        assert all(0 <= v <= 255 for v in snap[key]), f"{key} not quantised into 0-255"
+    assert np.mean(snap["spectrum_after"]) < np.mean(snap["spectrum_before"]), (
+        "under one SHARED auto-gain, the suppressed AFTER panel must read darker than BEFORE"
+    )
+    print("  [PASS] test 1b: display spectra computed once in the metrics thread, quantised "
+          "to 0-255, AFTER reads darker than BEFORE under the shared auto-gain")
 
     # --- Test 2: reference_available False -> intrusive metrics stay None, never fabricated ---
     sm._running = True

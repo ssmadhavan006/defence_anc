@@ -93,6 +93,57 @@ def _score_dnsmos_or_none(path: str):
         return None
 
 
+def record_from_pipeline(pipeline, duration_sec: float, sr: int = 48000,
+                          poll_sec: float = None, timeout_margin_sec: float = 5.0) -> np.ndarray:
+    """
+    Capture `duration_sec` of real microphone audio from an ALREADY-RUNNING
+    pipeline's capture tap, instead of opening a second stream on the same
+    device.
+
+    Why this exists (Pi 5, 2026-09-05): when the live pipeline holds the
+    input device open with its continuous sd.InputStream, ALSA refuses a
+    second concurrent open of that same device -- `sd.rec()` fails with
+    `PortAudioError: Error opening InputStream: Device unavailable
+    [PaErrorCode -9985]`, so every /record request 500'd. Rather than
+    stopping and restarting the live stream around each recording (a gap in
+    the demo, and a restart that could fail), this reads the chunks the
+    pipeline is ALREADY capturing.
+
+    Bonus correctness: the clip is then exactly the signal the pipeline
+    itself heard and processed, which is what a comparison demo actually
+    wants to be showing.
+
+    Uses the same poll-faster-than-chunk-rate + identity-dedup pattern as
+    live/stage_metrics.py, so the result is a contiguous slice of audio
+    rather than sampled snippets.
+    """
+    chunk_sec = float(getattr(pipeline, "_chunk_sec", 0.1) or 0.1)
+    poll = poll_sec if poll_sec is not None else max(0.005, chunk_sec / 4.0)
+    target = int(round(duration_sec * sr))
+
+    collected = []
+    total = 0
+    last_seen = None
+    deadline = time.monotonic() + duration_sec + timeout_margin_sec
+
+    while total < target:
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"Timed out capturing from the live pipeline after "
+                f"{duration_sec + timeout_margin_sec:.1f}s (got {total}/{target} samples). "
+                f"Is the pipeline actually running and receiving audio?"
+            )
+        chunk = pipeline.stage_taps.capture
+        if chunk is not None and chunk is not last_seen:
+            last_seen = chunk
+            collected.append(np.asarray(chunk, dtype=np.float32).copy())
+            total += len(collected[-1])
+        else:
+            time.sleep(poll)
+
+    return np.concatenate(collected)[:target]
+
+
 def record_clip(duration_sec: float, device=None, sr: int = 48000, channels: int = 1) -> np.ndarray:
     """
     Record `duration_sec` seconds from a real microphone. Requires
@@ -166,7 +217,15 @@ def register_and_process(raw_audio_path: str, recordings_dir: str = DEFAULT_RECO
 
 
 def make_record_app(recordings_dir: str = DEFAULT_RECORDINGS_DIR, device=None,
-                     sample_rate: int = 48000, atten_lim_db: float = 30.0) -> "FastAPI":
+                     sample_rate: int = 48000, atten_lim_db: float = 30.0,
+                     pipeline=None) -> "FastAPI":
+    """
+    `pipeline`: when a running LivePipeline is passed, recordings are taken
+    from its existing capture tap (see record_from_pipeline) rather than by
+    opening the input device a second time -- required on the Pi, where the
+    device is held exclusively by the live stream. Falls back to opening the
+    device directly only when no pipeline is attached (standalone use).
+    """
     if not _FASTAPI_OK:
         raise ImportError("fastapi is required. Install: pip install fastapi uvicorn[standard]")
 
@@ -180,7 +239,10 @@ def make_record_app(recordings_dir: str = DEFAULT_RECORDINGS_DIR, device=None,
     async def record(duration_sec: float = 10.0):
         if not (1.0 <= duration_sec <= 60.0):
             raise HTTPException(status_code=400, detail="duration_sec must be between 1 and 60")
-        raw = record_clip(duration_sec, device=device, sr=sample_rate, channels=1)
+        if pipeline is not None and getattr(pipeline, "stage_taps", None) is not None:
+            raw = record_from_pipeline(pipeline, duration_sec, sr=sample_rate)
+        else:
+            raw = record_clip(duration_sec, device=device, sr=sample_rate, channels=1)
         tmp_path = os.path.join(recordings_dir, "_tmp_capture.wav")
         sf.write(tmp_path, raw, sample_rate)
         result = register_and_process(tmp_path, recordings_dir, atten_lim_db=atten_lim_db)
@@ -257,6 +319,47 @@ def _self_test():
         )
         print("  [PASS] test 4: oracle NLMS baseline is correctly excluded "
               "(no isolated noise-only reference exists for a live recording)")
+
+        # --- Test 6: tap-based capture (the Pi fix) assembles a contiguous
+        # clip of the right length from a running pipeline, without touching
+        # any audio device. Simulates the pipeline by advancing stage_taps
+        # from a background thread the way the real inference loop does.
+        import threading
+        from live.stage_taps import StageTaps
+
+        class _FakeRunningPipeline:
+            _sr = 48000
+            _chunk_sec = 0.02   # fast fake chunks so the self-test stays quick
+
+            def __init__(self):
+                self.stage_taps = StageTaps()
+
+        fake = _FakeRunningPipeline()
+        stop_feeding = threading.Event()
+
+        def _feed():
+            counter = 0
+            while not stop_feeding.is_set():
+                # A fresh array object each tick -- identity dedup depends on this,
+                # exactly like live/pipeline.py's real _inference_loop.
+                fake.stage_taps.capture = np.full(960, counter % 100, dtype=np.float32)
+                counter += 1
+                time.sleep(fake._chunk_sec)
+
+        feeder = threading.Thread(target=_feed, daemon=True)
+        feeder.start()
+        try:
+            captured = record_from_pipeline(fake, duration_sec=0.2, sr=48000)
+        finally:
+            stop_feeding.set()
+            feeder.join(timeout=1.0)
+
+        assert len(captured) == int(0.2 * 48000), (
+            f"expected exactly {int(0.2 * 48000)} samples, got {len(captured)}"
+        )
+        assert captured.dtype == np.float32
+        print(f"  [PASS] test 6: record_from_pipeline() assembled {len(captured)} contiguous "
+              f"samples from a running pipeline's tap, with no audio device opened")
 
         if _FASTAPI_OK:
             from starlette.testclient import TestClient
